@@ -1,5 +1,5 @@
 ---
-title: "Observability Stack: Logs, Loki, and Grafana"
+title: "Ship Quote Observability: Winston, Loki, and Grafana Logs"
 sidebarTitle: "Monitoring"
 description: "Trace every HTTP request from Winston JSON logs through Promtail and Loki into Grafana dashboards with Ship Quote's built-in observability stack."
 ---
@@ -96,6 +96,21 @@ Morgan is the HTTP request logging middleware for Express. Rather than writing i
 import morgan from 'morgan';
 import logger from './logger.js';
 
+const logHttpRequest = (type, params) => {
+    const method = ['warn', 'error'].includes(type)
+        ? type
+        : 'info';
+
+    if (type !== 'info') {
+        return logger[method]({ ...params });
+    }
+
+    logger.info('http_requests', {
+        ...params,
+        event: 'http_requests'
+    });
+};
+
 const getLogLevelFromStatus = (status) => {
     return status >= 500
         ? 'error'
@@ -108,17 +123,20 @@ const httpLogger = morgan((tokens, req, res) => {
     const status = Number(tokens.status(req, res));
     const logLevel = getLogLevelFromStatus(status);
 
-    logger[logLevel]('http_requests', {
-        service: 'ship-quote-api',
-        ...res?.locals.logData,
-        method:        tokens.method(req, res),
-        path:          req.path,
-        status,
-        responseTime:  Number(tokens['response-time'](req, res)),
-        contentLength: tokens.res(req, res, 'content-length') || 0,
-        ip:            tokens['remote-addr'](req, res),
-        userAgent:     tokens['user-agent'](req, res),
-    });
+    logHttpRequest(
+        logLevel,
+        {
+            service: 'ship-quote-api',
+            ...res?.locals.logData,
+            method:        tokens.method(req, res),
+            path:          req.path,
+            status,
+            responseTime:  Number(tokens['response-time'](req, res)),
+            contentLength: tokens.res(req, res, 'content-length') || 0,
+            ip:            tokens['remote-addr'](req, res),
+            userAgent:     tokens['user-agent'](req, res),
+        }
+    );
 
     return null;  // prevents Morgan from writing its own string to stdout
 });
@@ -130,7 +148,8 @@ export default process.env.NODE_ENV === 'test'
 
 Key behaviours to note:
 
-- **Log-level routing:** The severity is derived automatically from the HTTP status code. `2xx/3xx` → `info`, `4xx` → `warn`, `5xx` → `error`. This means failed requests surface immediately in Grafana when filtering on `level=warn` or `level=error`.
+- **Log-level routing:** The severity is derived automatically from the HTTP status code via `getLogLevelFromStatus`. `2xx/3xx` → `info`, `4xx` → `warn`, `5xx` → `error`. This means failed requests surface immediately in Grafana when filtering on `level=warn` or `level=error`.
+- **`logHttpRequest` helper:** For `info`-level entries, the helper calls `logger.info('http_requests', { ...params, event: 'http_requests' })`. For `warn` and `error` entries, it calls `logger[method]({ ...params })` directly without a message string, keeping the log object flat.
 - **Null return:** Morgan's formatter returns `null` instead of a string, preventing a duplicate plain-text line from appearing alongside the JSON output.
 - **Test mode:** When `NODE_ENV=test`, the middleware falls back to Morgan's built-in `dev` format so test output stays human-readable in CI logs.
 - **`res.locals.logData`:** Controllers can attach extra context (such as matched agency or zone) to `res.locals.logData`; Morgan spreads it into the log entry automatically.
@@ -158,7 +177,7 @@ scrape_configs:
 
     relabel_configs:
       - source_labels: ['__meta_docker_container_name']
-        regex: '/(.*)
+        regex: '/(.*)' 
         target_label: container
 
     pipeline_stages:
@@ -243,9 +262,9 @@ limits_config:
 
 All of these paths live inside the `loki_data` named Docker volume, so log data persists across Loki container restarts. The `period: 24h` index rotation means a new index shard is created each day, keeping individual shard sizes manageable.
 
-<Info>
+<Note>
   `auth_enabled: false` disables Loki's multi-tenant authentication. This is appropriate for a single-environment development or self-hosted setup. For a shared or internet-facing deployment, enable authentication and configure a reverse proxy in front of Loki.
-</Info>
+</Note>
 
 ## Grafana Setup
 

@@ -1,14 +1,14 @@
 ---
 title: "Ship Quote MongoDB Collections: Full Schema Reference"
 sidebarTitle: "Data Models"
-description: "Complete MongoDB schemas for all five Ship Quote collections: Agency, Location, PalletType, Zone, and Rate, with indexes and inter-model relationships."
+description: "Ship Quote MongoDB schema reference: six collections, every field, index, and relationship for Agency, Location, PalletType, Zone, ZoneRules, and Rate."
 ---
 
-Ship Quote stores its configuration in five MongoDB collections managed through Mongoose. Understanding how these models relate to each other is essential for seeding data correctly and for extending the system with new carriers. This page documents every field in every schema, the indexes that back the rate engine's queries, and the relationships that tie the models together.
+Ship Quote stores its configuration in six MongoDB collections managed through Mongoose. Understanding how these models relate to each other is essential for seeding data correctly and for extending the system with new carriers. This page documents every field in every schema, the indexes that back the rate engine's queries, and the relationships that tie the models together.
 
 ## Model Relationships
 
-The diagram below shows how the five collections are connected.
+The diagram below shows how the six collections are connected.
 
 ```
 Agency (1) ──────────────────────── Zone (N)
@@ -141,7 +141,7 @@ The `Location` model (`api/src/lib/models/location.model.js`) stores the geograp
 ```javascript
 locationSchema.index({ countryCode: 1, normalizedName: 1 });
 locationSchema.index({ adminFullCode: 1 }, { unique: true });
-locationSchema.index({ normalizedName: 1 });   // single-field, defined on the path
+// normalizedName also carries a single-field index declared inline on the path
 ```
 
 The `adminFullCode` unique index prevents duplicate province records. The composite `{ countryCode, normalizedName }` index accelerates province look-ups by name when filtering by country.

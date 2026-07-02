@@ -38,7 +38,7 @@ GET /api/v1/locations/provincesByPostalCode/:postalCode
 
 Returns `HTTP 200 OK` with a single province object when a match is found.
 
-<ResponseField name="_id" type="string">
+<ResponseField name="id" type="string">
   MongoDB ObjectId of the province document.
 </ResponseField>
 
@@ -103,7 +103,7 @@ curl -X GET "http://localhost:3000/api/v1/locations/provincesByPostalCode/23700"
 
 ```json
 {
-  "_id": "6a33f09ea7b22b51721309bc",
+  "id": "6a33f09ea7b22b51721309bc",
   "countryCode": "ES",
   "countryName": "Spain",
   "adminCode": "J",
@@ -121,7 +121,7 @@ curl -X GET "http://localhost:3000/api/v1/locations/provincesByPostalCode/23700"
 
 ```json
 {
-  "_id": "6a33f09ea7b22b51721309d1",
+  "id": "6a33f09ea7b22b51721309d1",
   "countryCode": "ES",
   "countryName": "Spain",
   "adminCode": "M",

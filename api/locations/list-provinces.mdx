@@ -1,7 +1,7 @@
 ---
 title: "List Provinces — Ship Quote API Locations Reference"
 sidebarTitle: "List Provinces"
-description: "Fetch all provinces with admin codes, normalized names, and postal prefixes. Filter by country code. Use adminFullCode values with compareByProvinceCode."
+description: "Fetch all provinces with admin codes, normalized names, and postal prefixes. Use adminFullCode values with compareByProvinceCode."
 ---
 
 The List Provinces endpoint returns the full catalogue of geographic province entries stored in Ship Quote. Each province object includes the two-digit postal prefix, the normalized name used for internal search, and the `adminFullCode` — a compound code like `ES-GR` or `ES-M` that you pass directly to `POST /rates/compareByProvinceCode` when you already know the destination province. The Spanish province dataset (all 52 provinces including the Balearic and Canary Islands) is seeded automatically on first startup and is served from an in-memory cache, so this endpoint returns results with no database query.
@@ -12,26 +12,11 @@ The List Provinces endpoint returns the full catalogue of geographic province en
 GET /api/v1/locations/provinces
 ```
 
-## Query Parameters
-
-<ParamField query="countryCode" type="string">
-  Filter results to provinces belonging to a specific country. Pass the
-  ISO-3166-1 alpha-2 code in uppercase (e.g. `ES`). When omitted, all provinces
-  across all countries are returned.
-</ParamField>
-
-<Note>
-  The `countryCode` filter is applied client-side against the in-memory province
-  list. The current seed dataset contains Spanish provinces only (`countryCode:
-  "ES"`). Provinces for other countries can be added via
-  [`POST /api/v1/locations`](/api/locations/create).
-</Note>
-
 ## Response
 
 Returns `HTTP 200 OK` with a JSON array of province objects.
 
-<ResponseField name="_id" type="string">
+<ResponseField name="id" type="string">
   MongoDB ObjectId of the province document.
 </ResponseField>
 
@@ -89,13 +74,13 @@ Returns `HTTP 200 OK` with a JSON array of province objects.
 <CodeGroup>
 
 ```bash cURL
-curl -X GET "http://localhost:3000/api/v1/locations/provinces?countryCode=ES"
+curl -X GET "http://localhost:3000/api/v1/locations/provinces"
 ```
 
 ```json 200 OK
 [
   {
-    "_id": "6a33f09ea7b22b51721309a5",
+    "id": "6a33f09ea7b22b51721309a5",
     "countryCode": "ES",
     "countryName": "Spain",
     "adminCode": "VI",
@@ -108,7 +93,7 @@ curl -X GET "http://localhost:3000/api/v1/locations/provinces?countryCode=ES"
     "updatedAt": "2026-06-18T13:20:30.436Z"
   },
   {
-    "_id": "6a33f09ea7b22b51721309a6",
+    "id": "6a33f09ea7b22b51721309a6",
     "countryCode": "ES",
     "countryName": "Spain",
     "adminCode": "AB",

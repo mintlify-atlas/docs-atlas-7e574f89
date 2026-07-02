@@ -1,5 +1,5 @@
 ---
-title: "Get Ship Quote Running Locally in Under 5 Minutes"
+title: "Run Ship Quote Locally and Make Your First API Request"
 sidebarTitle: "Quickstart"
 description: "Clone the repo, configure environment variables, seed initial data, start the API, and make your first multi-carrier rate comparison request."
 ---
@@ -46,28 +46,41 @@ cd ../web && cp .env.example .env
 Open `api/.env` and set the required values:
 
 ```env
-# Server
-PORT=3000
-NODE_ENV=development
+NODE_ENV=test
 
-# Database
-MONGODB_URI=mongodb://127.0.0.1:27017/shipQuote-db
+LOG_LEVEL=
+
+PORT=3000
+
+CORS_ORIGIN=http://localhost:5173
+
+API_URL=http://localhost:3000/api
+
 MONGODB_URI_TEST=mongodb://127.0.0.1:27017/shipQuote-db_test
+MONGODB_URI=mongodb://127.0.0.1:27017/shipQuote-db
 
 # Scope detection — shipments to this country are classified as national
 DEFAULT_COUNTRY=ES
 
-# Logging
-LOG_LEVEL=info
+COUNTRIES_API_ENABLED=false
+COUNTRIES_URL=https://api.restcountries.com/countries/v5?response_fields=names.translations,codes.alpha_2,names.common
+COUNTRIES_API_KEY=
+
+DEFAULT_PALLET_VOLUME=1000000
+DEFAULT_PARCEL_VOLUME=6000
 
 # External carrier API keys (optional — carriers are skipped if key is absent)
 DACHSER_API_KEY=
+DACHSER_API_N_CUSTOMER=
 ```
 
 Open `web/.env` and set the API URL:
 
 ```env
+VITE_NODE_ENV=test
+
 VITE_API_URL_DEV=http://localhost:3000/api/v1
+
 VITE_API_URL_PROD=/api/v1
 ```
 
@@ -99,7 +112,7 @@ npm run dev
 
 Nodemon loads `server.js` with your `.env` file, connects to MongoDB, initialises the in-memory cache (provinces, countries, agency tariffs), and begins listening.
 
-```
+```text
 Server running on port 3000
 ```
 

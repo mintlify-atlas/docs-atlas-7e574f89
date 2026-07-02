@@ -32,12 +32,16 @@ The API reads its environment with Node's native `--env-file` flag (no `dotenv` 
   The port Express listens on. Change this if 3000 is already in use on your machine. The web frontend must point its `VITE_API_URL_DEV` at the same port.
 </ParamField>
 
-<ParamField body="NODE_ENV" type="string" default="development">
+<ParamField body="NODE_ENV" type="string" default="test">
   Runtime environment. Accepted values are `development`, `production`, and `test`. When set to `test`, the database connection switches to `MONGODB_URI_TEST` automatically. Setting `production` disables certain development-only middleware.
 </ParamField>
 
 <ParamField body="CORS_ORIGIN" type="string" default="http://localhost:5173">
   The origin that the CORS middleware allows. Set this to the URL of your web frontend in production to restrict cross-origin requests.
+</ParamField>
+
+<ParamField body="API_URL" type="string" default="http://localhost:3000/api">
+  The base URL of the API server itself. Used internally when the application needs to reference its own address (for example, in generated links or health-check configurations).
 </ParamField>
 
 ### Database
@@ -80,7 +84,7 @@ The API reads its environment with Node's native `--env-file` flag (no `dotenv` 
 ### Logging
 
 <ParamField body="LOG_LEVEL" type="string" default="info">
-  Controls the minimum severity level emitted by the Winston logger. Accepted values (lowest to highest verbosity): `error`, `warn`, `info`, `debug`. Use `debug` during development to see every provider call; use `warn` or `error` in production to reduce log volume. Log output is structured JSON compatible with Loki/Promtail/Grafana.
+  Controls the minimum severity level emitted by the Winston logger. Accepted values (lowest to highest verbosity): `error`, `warn`, `info`, `debug`. Use `debug` during development to see every provider call; use `warn` or `error` in production to reduce log volume. Log output is structured JSON compatible with Loki/Promtail/Grafana. Leave blank in `.env` to use the logger's built-in default of `info`.
 </ParamField>
 
 ### Volume defaults
@@ -101,10 +105,14 @@ The API reads its environment with Node's native `--env-file` flag (no `dotenv` 
 
 <ParamField body="COUNTRIES_URL" type="string">
   The URL of the external countries API, used only when `COUNTRIES_API_ENABLED=true`.
+
+  ```
+  COUNTRIES_URL=https://api.restcountries.com/countries/v5?response_fields=names.translations,codes.alpha_2,names.common
+  ```
 </ParamField>
 
 <ParamField body="COUNTRIES_API_KEY" type="string">
-  API key for the countries enrichment service, if required by the endpoint specified in `COUNTRIES_URL`.
+  API key for the countries enrichment service, if required by the endpoint specified in `COUNTRIES_URL`. Leave blank if the endpoint does not require authentication.
 </ParamField>
 
 ### External carrier API keys
@@ -123,14 +131,6 @@ These keys are passed to the carrier adapter layer. If a key is missing or empty
   Dachser customer number used alongside the API key when authenticating requests to the Dachser quoting endpoint.
 </ParamField>
 
-<ParamField body="DHL_API_KEY" type="string">
-  Reserved for the DHL carrier adapter. The variable is defined in the configuration schema for future use; no DHL adapter is active in the current release.
-</ParamField>
-
-<ParamField body="FEDEX_API_KEY" type="string">
-  Reserved for the FedEx carrier adapter. The variable is defined in the configuration schema for future use; no FedEx adapter is active in the current release.
-</ParamField>
-
 <Warning>
   Never commit a populated `api/.env` file to version control. The `.env.example` file exists precisely so secrets stay out of the repository. Add `.env` to `.gitignore` if it is not already there.
 </Warning>
@@ -140,6 +140,10 @@ These keys are passed to the carrier adapter layer. If a key is missing or empty
 ## Web environment variables
 
 The React + Vite frontend reads variables prefixed with `VITE_` at build time. All variables below live in `web/.env`.
+
+<ParamField body="VITE_NODE_ENV" type="string" default="test">
+  Controls which API URL the frontend uses. When set to `test` the frontend reads `VITE_API_URL_DEV`; for any other value it falls back to `VITE_API_URL_PROD`.
+</ParamField>
 
 <ParamField body="VITE_API_URL_DEV" type="string" default="http://localhost:3000/api/v1">
   The base URL the Axios client uses when `VITE_NODE_ENV=test` (i.e. local development). Point this at wherever your API is running, including any non-default port.
@@ -157,10 +161,6 @@ The React + Vite frontend reads variables prefixed with `VITE_` at build time. A
   ```
 </ParamField>
 
-<ParamField body="VITE_NODE_ENV" type="string" default="test">
-  Controls which API URL the frontend uses. When set to `test` the frontend reads `VITE_API_URL_DEV`; in all other values it falls back to `VITE_API_URL_PROD`.
-</ParamField>
-
 ---
 
 ## Complete variable reference
@@ -170,8 +170,9 @@ The table below is a quick-reference summary of every variable across both packa
 | Variable | Package | Required | Default | Purpose |
 |---|---|---|---|---|
 | `PORT` | api | No | `3000` | Express listen port |
-| `NODE_ENV` | api | No | `development` | Runtime environment; switches DB URI when `test` |
+| `NODE_ENV` | api | No | `test` | Runtime environment; switches DB URI when `test` |
 | `CORS_ORIGIN` | api | No | `http://localhost:5173` | Allowed CORS origin |
+| `API_URL` | api | No | `http://localhost:3000/api` | API's own base URL |
 | `MONGODB_URI` | api | **Yes** | — | Main MongoDB connection string |
 | `MONGODB_URI_TEST` | api | No | — | Test database connection string |
 | `DEFAULT_COUNTRY` | api | No | `ES` | ISO-2 code for national scope detection |
@@ -183,11 +184,9 @@ The table below is a quick-reference summary of every variable across both packa
 | `COUNTRIES_API_KEY` | api | No | — | Key for external countries API |
 | `DACHSER_API_KEY` | api | No | — | Dachser live API authentication key |
 | `DACHSER_API_N_CUSTOMER` | api | No | — | Dachser customer number |
-| `DHL_API_KEY` | api | No | — | Reserved for future DHL adapter |
-| `FEDEX_API_KEY` | api | No | — | Reserved for future FedEx adapter |
+| `VITE_NODE_ENV` | web | No | `test` | Selects dev vs. prod API URL |
 | `VITE_API_URL_DEV` | web | No | `http://localhost:3000/api/v1` | API base URL for local development |
 | `VITE_API_URL_PROD` | web | No | `/api/v1` | API base URL for production builds |
-| `VITE_NODE_ENV` | web | No | `test` | Selects dev vs. prod API URL |
 
 ---
 
@@ -197,6 +196,5 @@ Ship Quote is designed to degrade gracefully when external API keys are not pres
 
 - If `DACHSER_API_KEY` is empty, the Dachser carrier adapter is never invoked. The agency does not appear in rate comparison responses — there is no error, warning, or partial result for it.
 - Static carriers (Cayco, Tecum, MRW, Correosexpress) rely entirely on MongoDB data and are unaffected by missing API keys.
-- `DHL_API_KEY` and `FEDEX_API_KEY` are reserved variable names; no adapters for those carriers exist yet, so their presence or absence has no effect on the current release.
 
 This means you can run a fully functional local environment with zero carrier API keys — you will receive quotes from all static carriers as long as the database has been seeded with `npm run seed`.

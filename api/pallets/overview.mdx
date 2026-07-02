@@ -286,13 +286,7 @@ Permanently delete a pallet type. The rate engine will no longer be able to clas
 
 ### Response — 204 No Content
 
-Empty body on success.
-
-### Error responses
-
-| Status | Condition |
-|--------|-----------|
-| `404 Not Found` | No pallet type document exists with the given `palletTypeId`. |
+Empty body on success. This endpoint always returns `204` — it does not return `404` if the given ID does not exist.
 
 <Warning>
   Deleting a pallet type does not cascade to existing rate documents that reference it. If you remove a tier that is actively used by the rate table of an agency, that agency's pricing will be incomplete for shipments that fall into the deleted tier.

@@ -1,5 +1,5 @@
 ---
-title: "Docker Compose Deployment for Ship Quote API"
+title: "Docker Compose Setup and Deployment for Ship Quote API"
 sidebarTitle: "Docker"
 description: "Run the full Ship Quote stack — API, MongoDB, Loki, Promtail, and Grafana — with a single Docker Compose command in under a minute."
 ---
@@ -162,7 +162,7 @@ CMD ["npm", "start"]
 ### Build Argument Reference
 
 | Argument | Value in Compose | Purpose |
-|----------|-----------------|---------|
+|----------|-----------------|---------| 
 | `VITE_API_URL_PROD` | `/api/v1` | Relative base URL used by the React app in production builds. A relative path works because the frontend and API are served from the same origin (`localhost:8082`). |
 
 ## Environment Variables

@@ -42,7 +42,7 @@ Ship Quote ships with bootstrap data and adapter support for the following carri
 | **Dachser** | External API | Pallets |
 
 <Note>
-  Dachser is queried via its live API and requires a valid `DACHSER_API_KEY` in your environment. If the key is absent, Dachser is skipped and no error is raised for the other carriers. DHL and FedEx API key variables are reserved in the configuration for future adapters.
+  Dachser is queried via its live API and requires a valid `DACHSER_API_KEY` in your environment. If the key is absent, Dachser is skipped and no error is raised for the other carriers.
 </Note>
 
 ## Scope Detection
@@ -51,10 +51,15 @@ The scope system is the foundation of carrier filtering. When a rate comparison 
 
 ```javascript
 // api/src/lib/constants/scopes.zone.js
+export const SCOPE_TYPES = {
+    NATIONAL: 'national',
+    INTERNATIONAL: 'international'
+};
+
 export function getScope(countryCode) {
-  return countryCode === process.env.DEFAULT_COUNTRY
-    ? SCOPE_TYPES.NATIONAL      // 'national'
-    : SCOPE_TYPES.INTERNATIONAL; // 'international'
+    return countryCode === process.env.DEFAULT_COUNTRY
+        ? SCOPE_TYPES.NATIONAL      // 'national'
+        : SCOPE_TYPES.INTERNATIONAL; // 'international'
 }
 ```
 
@@ -62,7 +67,7 @@ Each agency in the database carries a `rules.coverage` array (e.g. `["national",
 
 ## Agency Types
 
-Agencies are typed as one of three values defined in the codebase:
+Agencies are typed as one of three values defined in `api/src/lib/constants/type.agency.js`:
 
 - **`static`** — rates are read entirely from MongoDB (zones, pallet types, rate tables)
 - **`api`** — rates are fetched from an external carrier API via a carrier adapter
@@ -70,7 +75,7 @@ Agencies are typed as one of three values defined in the codebase:
 
 ## Project Structure
 
-```
+```text
 ship-quote/
 ├── api/          # Node.js + Express 5 backend
 │   └── src/
@@ -90,3 +95,20 @@ ship-quote/
 │           └── logger/        # Winston + Morgan (Loki-compatible)
 └── web/          # React + Vite frontend
 ```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Clone the repo, seed the database, and make your first rate comparison request in under five minutes.
+  </Card>
+  <Card title="Configuration" icon="sliders" href="/configuration">
+    Full reference for every environment variable in the API and web frontend.
+  </Card>
+  <Card title="Architecture Overview" icon="diagram-project" href="/architecture/overview">
+    Deep dive into the rate engine, provider model, caching strategy, and request lifecycle.
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/rates/compare-by-postal-code">
+    Interactive endpoint documentation for all routes, request schemas, and response shapes.
+  </Card>
+</CardGroup>

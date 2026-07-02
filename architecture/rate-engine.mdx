@@ -123,7 +123,7 @@ The rate engine is the core of Ship Quote. It takes a single POST request carryi
   </Step>
 
   <Step title="Normalization and Response">
-    All raw results flow through `presentRate()` in `rate.presenter.js`. This function translates internal concept codes (`BASE`, `FUEL_SURCHARGE`, etc.) into human-readable labels using a labels map and shapes each entry into the public response format.
+    All raw results flow through `presentRate()` in `rate.presenter.js`. This function translates internal concept codes (`BASE`, `EXTRA_DIMENSIONS`, `EXTRA_WEIGHT`, `ADDITIONAL_BLOCK`, etc.) into human-readable labels using a labels map and shapes each entry into the public response format.
 
     ```javascript
     // api/src/api/services/rates/presenters/rate.presenter.js
@@ -242,8 +242,8 @@ Parcel calculation uses a different flow because parcel items are not grouped by
 
     | Surcharge | Trigger | Field |
     |---|---|---|
-    | `extraKg` | Item weight exceeds a per-item threshold | `surcharges.extraKg.pricePerKg` |
-    | `dimensionRanges` | Item longest-side falls within a bracket | `surcharges.dimensionRanges[]` |
+    | `extraKg` | Total shipment weight exceeds the last `priceBreaks` max bracket | `surcharges.extraKg.pricePerKg` |
+    | `dimensionRanges` | Item sum-of-dimensions (L + W + H) falls within a bracket | `surcharges.dimensionRanges[]` |
     | `multiParcelExcess` | Total weight exceeds `thresholdKg`; extra cost accrues in blocks of `divisor` kg | `surcharges.multiParcelExcess` |
   </Step>
   <Step title="Price Resolution">

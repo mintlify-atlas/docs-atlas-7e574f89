@@ -30,14 +30,8 @@ POST /api/v1/locations
   Administrative region code for the province, state, or region. This can be a
   numeric string (e.g. `"28"` for Madrid) or an alphabetic abbreviation (e.g.
   `"VI"` for Álava, `"AB"` for Albacete). Stored in uppercase. Together with
-  `countryCode` this forms the `adminFullCode`.
-</ParamField>
-
-<ParamField body="adminFullCode" type="string">
-  Fully-qualified administrative code with the country prefix, such as `ES-28`
-  or `ES-VI`. When omitted, the API constructs this automatically by
-  concatenating `countryCode + "-" + adminCode`. The `adminFullCode` field has a
-  unique index — attempting to create a duplicate will return an error.
+  `countryCode` this forms the `adminFullCode`, which is constructed
+  automatically as `countryCode + "-" + adminCode`.
 </ParamField>
 
 <ParamField body="name" type="string" required>
@@ -55,7 +49,7 @@ POST /api/v1/locations
 
 A successful request returns `HTTP 201 Created` with the persisted location document in the response body.
 
-<ResponseField name="_id" type="string">
+<ResponseField name="id" type="string">
   MongoDB ObjectId of the newly created location document.
 </ResponseField>
 
@@ -72,7 +66,8 @@ A successful request returns `HTTP 201 Created` with the persisted location docu
 </ResponseField>
 
 <ResponseField name="adminFullCode" type="string">
-  Fully-qualified code with country prefix (e.g. `ES-28`, `ES-VI`). This is
+  Fully-qualified code with country prefix, automatically constructed as
+  `countryCode + "-" + adminCode` (e.g. `ES-28`, `ES-VI`). This is
   the value you pass as `province` to `POST /rates/compareByProvinceCode`.
 </ResponseField>
 
@@ -114,7 +109,6 @@ curl -X POST http://localhost:3000/api/v1/locations \
     "countryCode": "ES",
     "countryName": "España",
     "adminCode": "28",
-    "adminFullCode": "ES-28",
     "name": "Madrid",
     "type": "province"
   }'
@@ -122,7 +116,7 @@ curl -X POST http://localhost:3000/api/v1/locations \
 
 ```json 201 Created
 {
-  "_id": "6a33f09ea7b22b51721309d1",
+  "id": "6a33f09ea7b22b51721309d1",
   "countryCode": "ES",
   "countryName": "España",
   "adminCode": "28",

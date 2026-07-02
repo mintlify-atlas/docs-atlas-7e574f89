@@ -7,7 +7,7 @@ description: "Register a new shipping agency in Ship Quote. Supports static (DB-
 Creating an agency is the first step to adding a carrier to the rate comparison engine. Each agency record stores the routing rules, shipment capabilities, pricing supplements, and — when the carrier exposes its own HTTP API — the credentials and endpoint map needed to query it in real time.
 
 <Info>
-  The `code` field is automatically derived from `name` by the API (lower-cased, diacritics stripped, spaces replaced with `_`). You do not need to send it explicitly, but you may include it if you want to verify the value your client expects.
+  The `code` field is automatically derived from `name` by the API (lower-cased, diacritics stripped, spaces replaced with `_`). It is not accepted as a request body field — the server always computes it from `name`.
 </Info>
 
 ## Endpoint
@@ -22,10 +22,6 @@ POST /api/v1/agencies
   Human-readable agency name. Must be between 3 and 14 characters. The value is title-cased automatically (e.g. `"dachser"` is stored as `"Dachser"`).
 </ParamField>
 
-<ParamField body="code" type="string">
-  URL-safe slug identifier for the agency (e.g. `"dachser"`, `"mrw"`). If omitted the API derives it from `name`. Must be unique across all agencies — a duplicate triggers a `409` response.
-</ParamField>
-
 <ParamField body="type" type="string" default="static">
   Determines how the rate engine sources prices for this agency. Accepted values:
 
@@ -34,10 +30,6 @@ POST /api/v1/agencies
   | `"static"` | Rates are read from locally stored zone and rate documents in MongoDB. |
   | `"api"` | Rates are fetched in real time from the carrier's external HTTP API. `apiConfig` is required. |
   | `"hybrid"` | Both static and API sources are used. `apiConfig` is required. |
-</ParamField>
-
-<ParamField body="active" type="boolean" default="true">
-  Whether the agency participates in rate comparisons immediately after creation. Set to `false` to register the agency without including it in results yet.
 </ParamField>
 
 <ParamField body="rules" type="object">

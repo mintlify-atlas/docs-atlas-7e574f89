@@ -6,17 +6,17 @@ description: "Full reference for the /api/v1/zones endpoints. Create and query t
 
 Zones are the geographic building blocks of the Ship Quote rate engine. Each zone groups one or more destination province admin codes under a single name — for example, Cayco's **ZONA 1** covers only Madrid (`ES-M`), while its **ZONA 7** spans eight north-western provinces. When a quote request arrives with a destination postal code or province, the engine resolves the province's admin code, finds the matching zone for the active agency, and uses that zone name to look up the correct price row in the agency's rate table.
 
-Agencies can also define **postal code exceptions** to override the default zone for specific postal code ranges within a province. Tecum, for example, redirects certain postal codes in Guadalajara (`ES-GU`) to **ZONA 2** instead of the province's default **ZONA 1**, enabling fine-grained pricing for rural or remote areas.
+Postal code exceptions — which override the default zone for specific postal code ranges within a province — are stored in a separate **ZoneRules** collection, not on the zone document itself. Tecum, for example, redirects certain postal codes in Guadalajara (`ES-GU`) to **ZONA 2** instead of the province's default zone, enabling fine-grained pricing for rural or remote areas. See the [bootstrap reference](#bootstrap-reference--real-zone-definitions) below for sample ZoneRules data.
 
 <Note>
-  Each zone is agency-scoped via `agencyId`. An agency's zone set must be complete — every province it serves should be covered by at least one zone, otherwise the rate engine will return no quote for destinations in uncovered provinces. Use postal code exceptions for sub-province overrides rather than creating overlapping zones.
+  Each zone is agency-scoped via `agencyId`. An agency's zone set must be complete — every province it serves should be covered by at least one zone, otherwise the rate engine will return no quote for destinations in uncovered provinces.
 </Note>
 
 ---
 
 ## POST /api/v1/zones
 
-Create a new zone for an agency.
+Create a new zone for an agency. The `pricingMode` and `volumetric` fields are set to their model defaults on creation; use the bootstrap utilities to set custom values during data seeding.
 
 ### Request body
 
@@ -37,24 +37,6 @@ Create a new zone for an agency.
 
   - `"pallet"` — use the pallet rate table (default)
   - `"parcel"` — use the parcel rate table
-</ParamField>
-
-<ParamField body="postalCodeExceptions" type="array">
-  Optional list of postal code range overrides. When the destination postal code falls within one of these ranges, the engine uses the specified `zoneName` instead of the zone's default name. Useful for redirecting remote or rural postal codes within a province to a different price tier.
-
-  <Expandable title="postalCodeExceptions item fields">
-    <ParamField body="postalCodeExceptions[].from" type="string">
-      Starting postal code of the range (inclusive), e.g. `"19261"`.
-    </ParamField>
-
-    <ParamField body="postalCodeExceptions[].to" type="string">
-      Ending postal code of the range (inclusive), e.g. `"19287"`.
-    </ParamField>
-
-    <ParamField body="postalCodeExceptions[].zoneName" type="string">
-      The zone name to apply for postal codes that fall within this range, e.g. `"ZONA 2"`.
-    </ParamField>
-  </Expandable>
 </ParamField>
 
 ### Response — 201 Created
@@ -79,8 +61,21 @@ Create a new zone for an agency.
   `"pallet"` or `"parcel"`.
 </ResponseField>
 
+<ResponseField name="volumetric" type="object">
+  Volumetric weight configuration for this zone.
+
+  <Expandable title="volumetric fields">
+    <ResponseField name="volumetric.enabled" type="boolean">
+      Whether volumetric weight calculation is active for this zone. Defaults to `false`.
+    </ResponseField>
+    <ResponseField name="volumetric.factor" type="number">
+      Divisor used to convert cubic centimetres to a volumetric weight in kg. Defaults to `200`.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
 <ResponseField name="pricingMode" type="object">
-  Internal pricing configuration applied by the engine for this zone.
+  Internal pricing configuration applied by the engine for this zone. Set automatically by the server; not accepted as a POST request body field.
 
   <Expandable title="pricingMode fields">
     <ResponseField name="pricingMode.type" type="string">
@@ -92,13 +87,13 @@ Create a new zone for an agency.
 
       <Expandable title="tonnagePricingRule fields">
         <ResponseField name="pricingMode.tonnagePricingRule.enabled" type="boolean">
-          Whether the tonnage rule is active for this zone.
+          Whether the tonnage rule is active for this zone. Defaults to `false`.
         </ResponseField>
         <ResponseField name="pricingMode.tonnagePricingRule.threshold" type="number">
-          Weight threshold in kg above which the per-tonne rate applies.
+          Weight threshold in kg above which the per-tonne rate applies. Defaults to `2001`.
         </ResponseField>
         <ResponseField name="pricingMode.tonnagePricingRule.unit" type="string">
-          Pricing unit label, e.g. `"€/ton"`.
+          Pricing unit label. Defaults to `"€/ton"`.
         </ResponseField>
       </Expandable>
     </ResponseField>
@@ -134,19 +129,14 @@ curl -X POST http://localhost:3000/api/v1/zones \
   }'
 ```
 
-```bash Tecum — ZONA 1 with postal code exceptions
+```bash Tecum — ZONA 1
 curl -X POST http://localhost:3000/api/v1/zones \
   -H "Content-Type: application/json" \
   -d '{
     "agencyId": "507f1f77bcf86cd799439022",
     "name": "ZONA 1",
     "provinces": ["ES-GU", "ES-M"],
-    "calculationMode": "pallet",
-    "postalCodeExceptions": [
-      { "from": "19261", "to": "19261", "zoneName": "ZONA 2" },
-      { "from": "19280", "to": "19287", "zoneName": "ZONA 2" },
-      { "from": "19300", "to": "19392", "zoneName": "ZONA 2" }
-    ]
+    "calculationMode": "pallet"
   }'
 ```
 
@@ -157,6 +147,10 @@ curl -X POST http://localhost:3000/api/v1/zones \
   "name": "ZONA 3",
   "provinces": ["ES-AV", "ES-GU", "ES-SG", "ES-VA"],
   "calculationMode": "pallet",
+  "volumetric": {
+    "enabled": false,
+    "factor": 200
+  },
   "pricingMode": {
     "type": "weight",
     "tonnagePricingRule": {
@@ -202,6 +196,10 @@ curl -X GET http://localhost:3000/api/v1/zones
     "name": "ZONA 1",
     "provinces": ["ES-M"],
     "calculationMode": "pallet",
+    "volumetric": {
+      "enabled": false,
+      "factor": 200
+    },
     "pricingMode": {
       "type": "weight",
       "tonnagePricingRule": {
@@ -223,6 +221,10 @@ curl -X GET http://localhost:3000/api/v1/zones
     "name": "ZONA 11",
     "provinces": ["ES-AL", "ES-J", "ES-MA"],
     "calculationMode": "pallet",
+    "volumetric": {
+      "enabled": true,
+      "factor": 200
+    },
     "pricingMode": {
       "type": "weight_volume",
       "tonnagePricingRule": {
@@ -244,6 +246,10 @@ curl -X GET http://localhost:3000/api/v1/zones
     "name": "ZONA 1",
     "provinces": ["ES-GU", "ES-M"],
     "calculationMode": "pallet",
+    "volumetric": {
+      "enabled": false,
+      "factor": 200
+    },
     "pricingMode": {
       "type": "weight",
       "tonnagePricingRule": {
@@ -301,6 +307,10 @@ curl -X GET http://localhost:3000/api/v1/zones/684b3a1cbe9876543210dcba
   "name": "ZONA 3",
   "provinces": ["ES-AV", "ES-BU", "ES-LO", "ES-SG", "ES-VA", "ES-Z"],
   "calculationMode": "pallet",
+  "volumetric": {
+    "enabled": false,
+    "factor": 200
+  },
   "pricingMode": {
     "type": "weight",
     "tonnagePricingRule": {
@@ -343,7 +353,7 @@ The tables below show the zones loaded by the built-in seed data for Cayco and T
 | ZONA 12 | ES-SE, ES-CO | weight_volume (Andalucia) |
 
 <Tip>
-  Cayco's ZONA 11 and ZONA 12 cover Andalucia and use `pricingMode.type = "weight_volume"` with a tonnage threshold of 1 001 kg. Shipments to these zones are priced using a per-kilogram rate table rather than the standard pallet tier table.
+  Cayco's ZONA 11 and ZONA 12 cover Andalucia and use `pricingMode.type = "weight_volume"` with `volumetric.enabled = true` and a tonnage threshold of 1 001 kg. Shipments to these zones are priced using a per-kilogram rate table rather than the standard pallet tier table.
 </Tip>
 
 ### Tecum zones
@@ -357,37 +367,49 @@ The tables below show the zones loaded by the built-in seed data for Cayco and T
 | ZONA 5 | ES-CS, ES-SS, ES-L, ES-O, ES-S, ES-T, ES-BI |
 | ZONA 6 | ES-B, ES-CC |
 | ZONA 7 | ES-C, ES-GI, ES-LU, ES-OR, ES-PO |
-| ZONA 8 | *(unassigned — reserved tier)* |
+| ZONA 8 | *(empty — reserved tier)* |
 | ZONA 9 | ES-IB-ML |
 | ZONA 10 | ES-IB-IB, ES-IB-MN |
 | ZONA 11 | ES-GC-GC, ES-TF-TE |
 | ZONA 12 | ES-GC-FU, ES-GC-LA, ES-TF-LP, ES-TF-LG, ES-TF-EH |
 | ZONA 13 | PT-Madeira |
 | ZONA 14 | PT-São Miguel |
-| ZONA 16 | ES-GR *(via postal code exception override)* |
-| ZONA 17 | ES-GR *(via postal code exception override)* |
+| ZONA 16 | ES-GR |
+| ZONA 17 | ES-GR |
 | ZONA 21 | ES-J |
 | ZONA 22 | ES-CO |
 | ZONA 23 | ES-AB, ES-AL, ES-CR, ES-SE, ES-MA |
 | ZONA 24 | ES-BA, ES-CU, ES-H, ES-MU |
 | ZONA 25 | ES-A, ES-CA |
 
-### Tecum postal code exceptions (sample)
+<Note>
+  ZONA 16 and ZONA 17 both list `ES-GR` (Granada) as their province. The engine uses ZoneRules postal code range records to decide which of the two zones applies to a given Granada postal code — postal codes `18001–18330` route to ZONA 16; all other Granada addresses resolve to ZONA 17.
+</Note>
 
-Tecum uses postal code exceptions to route specific addresses in Guadalajara (`ES-GU`) to **ZONA 2** and several postal ranges in León (`ES-LE`) to **ZONA 6**, overriding the default zone for those provinces.
+### Tecum ZoneRules — postal code range overrides (sample)
+
+Postal code exceptions are stored in the **ZoneRules** collection, not on the zone document. Each ZoneRules record links a province, a target zone, and an array of postal code ranges. The sample below shows the Guadalajara (`ES-GU`) and León (`ES-LE`) overrides loaded by the Tecum bootstrap.
 
 ```json
 [
-  { "from": "19261", "to": "19261", "zoneName": "ZONA 2" },
-  { "from": "19280", "to": "19287", "zoneName": "ZONA 2" },
-  { "from": "19300", "to": "19392", "zoneName": "ZONA 2" },
-  { "from": "19432", "to": "19445", "zoneName": "ZONA 2" },
-  { "from": "19460", "to": "19463", "zoneName": "ZONA 2" },
-  { "from": "24100", "to": "24114", "zoneName": "ZONA 6" },
-  { "from": "24300", "to": "24319", "zoneName": "ZONA 6" },
-  { "from": "24360", "to": "24380", "zoneName": "ZONA 6" },
-  { "from": "18001", "to": "18015", "zoneName": "ZONA 16" },
-  { "from": "18100", "to": "18199", "zoneName": "ZONA 16" },
-  { "from": "18200", "to": "18330", "zoneName": "ZONA 16" }
+  { "province": "ES-GU", "zoneName": "ZONA 2", "postalCodeRanges": [
+    { "from": "19261", "to": "19261" },
+    { "from": "19280", "to": "19287" },
+    { "from": "19300", "to": "19392" },
+    { "from": "19432", "to": "19445" },
+    { "from": "19460", "to": "19463" },
+    { "from": "19492", "to": "19492" },
+    { "from": "19495", "to": "19495" }
+  ]},
+  { "province": "ES-LE", "zoneName": "ZONA 6", "postalCodeRanges": [
+    { "from": "24100", "to": "24114" },
+    { "from": "24300", "to": "24319" },
+    { "from": "24360", "to": "24380" }
+  ]},
+  { "province": "ES-GR", "zoneName": "ZONA 16", "postalCodeRanges": [
+    { "from": "18001", "to": "18015" },
+    { "from": "18100", "to": "18199" },
+    { "from": "18200", "to": "18330" }
+  ]}
 ]
 ```
