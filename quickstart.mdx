@@ -1,47 +1,257 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Ship Quote Running Locally in Under 5 Minutes"
+sidebarTitle: "Quickstart"
+description: "Clone the repo, configure environment variables, seed initial data, start the API, and make your first multi-carrier rate comparison request."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+This guide walks you from a fresh clone to a working rate comparison request against a locally running Ship Quote API. The only hard prerequisites are **Node.js 18+** and a running **MongoDB 4.4+** instance — either local or a remote connection string.
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
 
-    ```bash
-    npm install your-package
-    ```
-  </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+<Step title="Clone the repository and install dependencies">
 
-    ```bash
-    your-cli init
-    ```
-  </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+Clone the repository and install dependencies for both the API and the optional web frontend.
 
-    ```bash
-    your-cli start
-    ```
-  </Step>
-</Steps>
+```bash
+git clone <repo-url>
+cd ship-quote
+```
+
+Install the API dependencies:
+
+```bash
+cd api
+npm install
+```
+
+Install the web frontend dependencies (optional — only needed if you want the UI):
+
+```bash
+cd ../web
+npm install
+```
+
+</Step>
+
+<Step title="Configure environment variables">
+
+Copy the example environment files and fill in your values. The API will not start without a valid MongoDB connection string.
+
+```bash
+# From the repo root
+cd api && cp .env.example .env
+cd ../web && cp .env.example .env
+```
+
+Open `api/.env` and set the required values:
+
+```env
+# Server
+PORT=3000
+NODE_ENV=development
+
+# Database
+MONGODB_URI=mongodb://127.0.0.1:27017/shipQuote-db
+MONGODB_URI_TEST=mongodb://127.0.0.1:27017/shipQuote-db_test
+
+# Scope detection — shipments to this country are classified as national
+DEFAULT_COUNTRY=ES
+
+# Logging
+LOG_LEVEL=info
+
+# External carrier API keys (optional — carriers are skipped if key is absent)
+DACHSER_API_KEY=
+```
+
+Open `web/.env` and set the API URL:
+
+```env
+VITE_API_URL_DEV=http://localhost:3000/api/v1
+VITE_API_URL_PROD=/api/v1
+```
 
 <Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
-
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
+  Leave `DACHSER_API_KEY` blank during local development if you do not have a key. Ship Quote will skip Dachser and still return quotes from every static carrier (Cayco, Tecum, MRW, Correosexpress).
 </Tip>
+
+</Step>
+
+<Step title="Seed the database with bootstrap data">
+
+The `seed` script loads the initial geographic data, agency records, pallet types, zones, and rate tables that the rate engine depends on. Run this once before starting the server for the first time.
+
+```bash
+cd api
+npm run seed
+```
+
+You should see log output confirming that provinces, countries, agencies, and tariffs have been inserted. If you re-run the seed it is safe — duplicate records are handled gracefully.
+
+</Step>
+
+<Step title="Start the API development server">
+
+```bash
+cd api
+npm run dev
+```
+
+Nodemon loads `server.js` with your `.env` file, connects to MongoDB, initialises the in-memory cache (provinces, countries, agency tariffs), and begins listening.
+
+```
+Server running on port 3000
+```
+
+The API base URL is now `http://localhost:3000/api/v1`. The interactive OpenAPI documentation is available at `http://localhost:3000/api-docs`.
+
+</Step>
+
+<Step title="Make your first rate comparison request">
+
+Send a `POST` request to `/api/v1/rates/compareByPostalCode` with a destination postal code, country code, and at least one shipment item. The example below quotes a single pallet bound for Madrid (`28001`).
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST http://localhost:3000/api/v1/rates/compareByPostalCode \
+  -H "Content-Type: application/json" \
+  -d '{
+    "destinationPostalCode": "28001",
+    "countryCode": "ES",
+    "items": [
+      {
+        "typeServices": "pallet",
+        "weight": 215,
+        "length": 80,
+        "width": 90,
+        "height": 80
+      }
+    ]
+  }'
+```
+
+```json Expected Response
+[
+  {
+    "agency": "Cayco",
+    "available": true,
+    "zone": "ZONA 3",
+    "services": [
+      {
+        "service": "economy",
+        "total": 41.43,
+        "itemCount": 1,
+        "breakdown": [
+          {
+            "type": "Tarifa base",
+            "price": 41.43,
+            "palletType": "CUARTO",
+            "quantity": 1,
+            "unitPrice": 41.43,
+            "items": [
+              {
+                "typeServices": "pallet",
+                "weight": 215,
+                "large": 80,
+                "width": 90,
+                "height": 80
+              }
+            ]
+          }
+        ],
+        "incidents": []
+      }
+    ]
+  },
+  {
+    "agency": "Tecum",
+    "available": true,
+    "zone": "ZONA 1",
+    "services": [
+      {
+        "service": "premium",
+        "total": 43.48,
+        "itemCount": 1,
+        "breakdown": [
+          {
+            "type": "Tarifa base",
+            "price": 43.48,
+            "palletType": "QUARTER PALLET",
+            "quantity": 1,
+            "unitPrice": 43.48,
+            "items": [
+              {
+                "typeServices": "pallet",
+                "weight": 215,
+                "large": 80,
+                "width": 90,
+                "height": 80
+              }
+            ]
+          }
+        ],
+        "incidents": []
+      }
+    ]
+  },
+  {
+    "agency": "Dachser",
+    "available": true,
+    "zone": "NACIONAL",
+    "services": [
+      {
+        "service": "targoflex (500380)",
+        "total": 51.27,
+        "itemCount": 1,
+        "breakdown": [
+          {
+            "type": "freight ex works to place of destination",
+            "price": 45.10
+          },
+          {
+            "type": "fuel surcharge",
+            "price": 6.17
+          }
+        ],
+        "incidents": []
+      }
+    ]
+  }
+]
+```
+
+</CodeGroup>
+
+Each object in the response array represents one carrier. The `available` flag tells you whether that carrier returned at least one valid price. When `available` is `false`, the `incidents` array explains why (e.g. no tariff configured for that zone, dimension exceeded, API timeout).
+
+<Info>
+  The `countryCode` field drives scope detection. Sending `"countryCode": "ES"` with `DEFAULT_COUNTRY=ES` classifies the shipment as **national**, so only carriers that support national coverage are queried.
+</Info>
+
+</Step>
+
+<Step title="Start the web frontend (optional)">
+
+The web frontend is a React + Vite application that provides a UI for running comparisons and browsing results. It is completely optional for API usage.
+
+```bash
+cd web
+npm run dev
+```
+
+The development server starts at `http://localhost:5173` and proxies API calls to the URL defined in `VITE_API_URL_DEV`.
+
+<Note>
+  Make sure the API is running on port 3000 before opening the web UI, otherwise rate comparison requests from the browser will fail with a network error.
+</Note>
+
+</Step>
+
+</Steps>
+
+## Next Steps
+
+- Read the [Configuration](/configuration) page for a full reference of every environment variable.
+- Explore the interactive OpenAPI docs at `http://localhost:3000/api-docs` to try every endpoint.
+- To quote a parcel instead of a pallet, change `"typeServices"` to `"parcel"` and omit the dimension fields — only `weight` is required for parcels.

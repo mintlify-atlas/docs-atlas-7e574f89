@@ -1,0 +1,289 @@
+---
+title: "Create a Shipping Agency — Ship Quote API Reference"
+sidebarTitle: "Create Agency"
+description: "Register a new shipping agency in Ship Quote. Supports static (DB-backed rates), API (live external carrier), and hybrid rate modes."
+---
+
+Creating an agency is the first step to adding a carrier to the rate comparison engine. Each agency record stores the routing rules, shipment capabilities, pricing supplements, and — when the carrier exposes its own HTTP API — the credentials and endpoint map needed to query it in real time.
+
+<Info>
+  The `code` field is automatically derived from `name` by the API (lower-cased, diacritics stripped, spaces replaced with `_`). You do not need to send it explicitly, but you may include it if you want to verify the value your client expects.
+</Info>
+
+## Endpoint
+
+```
+POST /api/v1/agencies
+```
+
+## Request Body
+
+<ParamField body="name" type="string" required>
+  Human-readable agency name. Must be between 3 and 14 characters. The value is title-cased automatically (e.g. `"dachser"` is stored as `"Dachser"`).
+</ParamField>
+
+<ParamField body="code" type="string">
+  URL-safe slug identifier for the agency (e.g. `"dachser"`, `"mrw"`). If omitted the API derives it from `name`. Must be unique across all agencies — a duplicate triggers a `409` response.
+</ParamField>
+
+<ParamField body="type" type="string" default="static">
+  Determines how the rate engine sources prices for this agency. Accepted values:
+
+  | Value | Description |
+  |-------|-------------|
+  | `"static"` | Rates are read from locally stored zone and rate documents in MongoDB. |
+  | `"api"` | Rates are fetched in real time from the carrier's external HTTP API. `apiConfig` is required. |
+  | `"hybrid"` | Both static and API sources are used. `apiConfig` is required. |
+</ParamField>
+
+<ParamField body="active" type="boolean" default="true">
+  Whether the agency participates in rate comparisons immediately after creation. Set to `false` to register the agency without including it in results yet.
+</ParamField>
+
+<ParamField body="rules" type="object">
+  Routing and capability rules applied during rate comparison.
+
+  <Expandable title="rules fields">
+    <ParamField body="rules.hasAndaluciaRule" type="boolean" default="false">
+      Applies a special surcharge or alternative zone mapping for destinations in Andalusia (southern Spain). Enable only for carriers that bill this region differently.
+    </ParamField>
+
+    <ParamField body="rules.supportsPallets" type="boolean" default="true">
+      When `true`, the engine includes this agency when the shipment contains pallet items.
+    </ParamField>
+
+    <ParamField body="rules.supportsParcels" type="boolean" default="false">
+      When `true`, the engine includes this agency when the shipment contains parcel items.
+    </ParamField>
+
+    <ParamField body="rules.coverage" type="array of strings" default='["national"]'>
+      Geographic scope this agency serves. Accepted values are `"national"` and `"international"`. The engine filters agencies by comparing this field against the detected shipment scope (derived from `countryCode`).
+
+      ```json
+      ["national"]
+      ["international"]
+      ["national", "international"]
+      ```
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="supplements" type="object">
+  Pricing supplements applied on top of the base rate.
+
+  <Expandable title="supplements fields">
+    <ParamField body="supplements.fuelSurcharge" type="object">
+      Fuel surcharge configuration added to every quoted shipment for this agency.
+
+      <Expandable title="fuelSurcharge fields">
+        <ParamField body="supplements.fuelSurcharge.enabled" type="boolean" default="false">
+          Toggle the fuel surcharge on or off without removing the configuration.
+        </ParamField>
+
+        <ParamField body="supplements.fuelSurcharge.type" type="string" default="percentage">
+          How the surcharge amount is applied. `"percentage"` multiplies the base rate; `"fixed"` adds a flat euro amount.
+        </ParamField>
+
+        <ParamField body="supplements.fuelSurcharge.value" type="number" default="0">
+          The surcharge amount. For `"percentage"`, supply a value like `5.5` (meaning 5.5 %). For `"fixed"`, supply the euro amount (e.g. `2.50`).
+        </ParamField>
+      </Expandable>
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="apiConfig" type="object">
+  Carrier API connection details. **Required when `type` is `"api"` or `"hybrid"`**. Ignored for `"static"` agencies.
+
+  <Expandable title="apiConfig fields">
+    <ParamField body="apiConfig.baseUrlApi" type="string">
+      Base URL of the carrier's HTTP API (e.g. `"https://api.dachser.com"`). Required when `type` is `"api"` or `"hybrid"`.
+    </ParamField>
+
+    <ParamField body="apiConfig.timeout" type="number" default="3000">
+      Maximum time in milliseconds to wait for a response from the carrier API before aborting the request. Defaults to 3 000 ms.
+    </ParamField>
+
+    <ParamField body="apiConfig.apiKey" type="string">
+      Authentication key sent to the carrier API. Required when `type` is `"api"` or `"hybrid"`.
+    </ParamField>
+
+    <ParamField body="apiConfig.endpoints" type="object">
+      Carrier-specific URL paths appended to `baseUrlApi` for each operation.
+
+      <Expandable title="endpoints fields">
+        <ParamField body="apiConfig.endpoints.quotations" type="string">
+          Path used to request rate quotations (e.g. `"/v2/quotations"`).
+        </ParamField>
+
+        <ParamField body="apiConfig.endpoints.transportOrders" type="string">
+          Path used to create transport orders (e.g. `"/v2/orders"`).
+        </ParamField>
+      </Expandable>
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Response
+
+A successful request returns HTTP **201 Created** with the full agency document.
+
+<ResponseField name="id" type="string">
+  MongoDB ObjectId of the newly created agency.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Title-cased agency name as stored.
+</ResponseField>
+
+<ResponseField name="code" type="string">
+  Normalised slug identifier derived from `name`.
+</ResponseField>
+
+<ResponseField name="type" type="string">
+  Agency type: `"static"`, `"api"`, or `"hybrid"`.
+</ResponseField>
+
+<ResponseField name="active" type="boolean">
+  `true` if the agency is included in rate comparisons.
+</ResponseField>
+
+<ResponseField name="rules" type="object">
+  Capability and routing rules as stored.
+
+  <Expandable title="rules fields">
+    <ResponseField name="hasAndaluciaRule" type="boolean" />
+    <ResponseField name="supportsPallets" type="boolean" />
+    <ResponseField name="supportsParcels" type="boolean" />
+    <ResponseField name="coverage" type="array of strings" />
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="supplements" type="object">
+  Stored supplement configuration.
+
+  <Expandable title="supplements.fuelSurcharge fields">
+    <ResponseField name="fuelSurcharge.enabled" type="boolean" />
+    <ResponseField name="fuelSurcharge.type" type="string" />
+    <ResponseField name="fuelSurcharge.value" type="number" />
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="apiConfig" type="object">
+  Carrier API configuration (present for `"api"` and `"hybrid"` agencies).
+
+  <Expandable title="apiConfig fields">
+    <ResponseField name="baseUrlApi" type="string" />
+    <ResponseField name="timeout" type="number" />
+    <ResponseField name="apiKey" type="string" />
+    <ResponseField name="endpoints" type="object">
+      <Expandable title="endpoints fields">
+        <ResponseField name="quotations" type="string" />
+        <ResponseField name="transportOrders" type="string" />
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 timestamp of when the agency was created.
+</ResponseField>
+
+<ResponseField name="updatedAt" type="string">
+  ISO 8601 timestamp of the last update.
+</ResponseField>
+
+## Examples
+
+The following example creates **Dachser** as an `"api"` agency that covers both national and international shipments, bills a 5.5 % fuel surcharge, and handles pallets only.
+
+<CodeGroup>
+
+```bash Request
+curl -X POST http://localhost:3000/api/v1/agencies \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Dachser",
+    "type": "api",
+    "rules": {
+      "hasAndaluciaRule": false,
+      "supportsPallets": true,
+      "supportsParcels": false,
+      "coverage": ["national", "international"]
+    },
+    "supplements": {
+      "fuelSurcharge": {
+        "enabled": true,
+        "type": "percentage",
+        "value": 5.5
+      }
+    },
+    "apiConfig": {
+      "baseUrlApi": "https://api.dachser.com",
+      "timeout": 5000,
+      "apiKey": "sk_live_xxxxx",
+      "endpoints": {
+        "quotations": "/v2/quotations",
+        "transportOrders": "/v2/orders"
+      }
+    }
+  }'
+```
+
+```json 201 Created
+{
+  "id": "507f1f77bcf86cd799439011",
+  "name": "Dachser",
+  "code": "dachser",
+  "type": "api",
+  "active": true,
+  "rules": {
+    "hasAndaluciaRule": false,
+    "supportsPallets": true,
+    "supportsParcels": false,
+    "coverage": ["national", "international"]
+  },
+  "supplements": {
+    "fuelSurcharge": {
+      "enabled": true,
+      "type": "percentage",
+      "value": 5.5
+    }
+  },
+  "apiConfig": {
+    "baseUrlApi": "https://api.dachser.com",
+    "timeout": 5000,
+    "apiKey": "sk_live_xxxxx",
+    "endpoints": {
+      "quotations": "/v2/quotations",
+      "transportOrders": "/v2/orders"
+    }
+  },
+  "createdAt": "2026-06-18T10:30:00.000Z",
+  "updatedAt": "2026-06-18T10:30:00.000Z"
+}
+```
+
+</CodeGroup>
+
+## Error Responses
+
+<ResponseField name="400 Bad Request" type="object">
+  Returned when a required field is missing or a value fails Mongoose schema validation (e.g. `name` shorter than 3 characters, unrecognised `type` value, or missing `baseUrlApi` for an `"api"` agency).
+
+  ```json
+  {
+    "message": "Name is required"
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="409 Conflict" type="object">
+  Returned when an agency with the same `code` already exists. Agency codes are derived from `name` and enforced as unique by a MongoDB index.
+
+  ```json
+  {
+    "message": "Resource duplicate"
+  }
+  ```
+</ResponseField>

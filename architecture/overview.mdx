@@ -1,0 +1,214 @@
+---
+title: "Ship Quote MERN Stack Architecture Overview Guide"
+sidebarTitle: "Overview"
+description: "Explore Ship Quote's full MERN-stack structure: Express API, React frontend, MongoDB models, in-memory caching, and the bootstrap seed process."
+---
+
+Ship Quote is a multi-tier shipping rate comparison platform built on the MERN stack (MongoDB, Express 5, React, Node.js). The backend exposes a versioned REST API at `/api/v1` that aggregates quotes from both static database records and live external carrier APIs, then returns a unified, normalized response. The React frontend consumes this API via Axios and displays a comparison UI. An optional observability stack (Loki, Promtail, Grafana) sits alongside the application services.
+
+## Repository Layout
+
+The monorepo is divided into four top-level directories, each with a clearly scoped responsibility.
+
+```
+ship-quote/
+├── api/                                 # Node.js + Express 5 backend
+│   ├── app.js                           # Server entry point
+│   └── src/
+│       ├── api/
+│       │   ├── controllers/             # Request/response handlers per resource
+│       │   ├── middlewares/             # Validation, error handling
+│       │   ├── docs/                    # OpenAPI specification (YAML + JSON)
+│       │   ├── services/
+│       │   │   ├── rates.service.js     # Main rate-engine orchestrator
+│       │   │   ├── cache.service.js     # In-memory tariff store (Map-based)
+│       │   │   ├── agencies.service.js
+│       │   │   ├── countries.service.js
+│       │   │   ├── provinces.service.js
+│       │   │   └── rates/
+│       │   │       ├── domains/         # Result builders (buildRateResult, etc.)
+│       │   │       ├── presenters/      # Response formatters (rate.presenter.js)
+│       │   │       └── providers/
+│       │   │           ├── static/      # DB-backed rate calculators
+│       │   │           └── api/         # External carrier adapters
+│       │   └── index.js                 # Express Router — all route definitions
+│       └── lib/
+│           ├── models/                  # Mongoose schemas (Agency, Zone, Rate…)
+│           ├── constants/               # Enums: SCOPE_TYPES, AGENCY_TYPE, etc.
+│           ├── utils/                   # Shared helpers (rate.utils.js, etc.)
+│           ├── configs/                 # DB connection, server config
+│           ├── data/                    # Bootstrap seed data per agency
+│           └── logger/                  # Winston + Morgan (Loki-compatible)
+├── web/                                 # React 18 + Vite frontend
+│   └── src/
+│       ├── components/                  # Reusable UI components
+│       ├── pages/                       # Route-level page components
+│       ├── hooks/                       # Custom React hooks
+│       ├── services/
+│       │   └── api-services.js          # Axios client (reads VITE_API_URL)
+│       └── assets/                      # Static assets
+├── infra/
+│   └── monitoring/                      # Loki + Promtail + Grafana config
+├── docs/                                # Markdown technical specs
+└── docker-compose.yml                   # Full-stack orchestration
+```
+
+## Separation of Concerns
+
+The backend follows a layered architecture where each layer has one responsibility and only communicates with the layer directly below it.
+
+<CardGroup cols={2}>
+  <Card title="Controllers" icon="gamepad-2">
+    Receive HTTP requests, delegate to services, and send the HTTP response. They do not contain business logic — they only translate between the HTTP layer and the service layer.
+  </Card>
+  <Card title="Services" icon="gears">
+    Contain all business logic. `rates.service.js` is the main orchestrator: it resolves scope, filters agencies, and fans out to providers in parallel.
+  </Card>
+  <Card title="Providers" icon="plug">
+    Implement the two rate-fetching strategies — **static** (reads from MongoDB via the in-memory cache) and **api** (calls external carrier HTTP endpoints). Both produce the same intermediate result shape.
+  </Card>
+  <Card title="Models" icon="database">
+    Mongoose schemas that define the MongoDB collections: `Agency`, `Location`, `PalletType`, `Zone`, `ZoneRules`, and `Rate`. See [Data Models](/architecture/data-models) for full schemas.
+  </Card>
+</CardGroup>
+
+The middleware layer sits in front of the controllers and handles two cross-cutting concerns:
+
+- **`schemaValidation`** — rejects `POST`/`PATCH`/`PUT` requests that arrive with no body.
+- **`rateDestinationValidation` + `rateItemsValidation`** — validates postal codes, country codes, and every item's dimensions before the request reaches a controller.
+
+## The Two-Provider Model
+
+Every active agency in the database is tagged with a `type` field: `static`, `api`, or `hybrid`. The rate engine uses this tag to route each agency to the correct provider.
+
+```javascript
+// api/src/api/services/rates.service.js
+const staticAgencies = agencies.filter(agency =>
+    agency.type === AGENCY_TYPE.STATIC ||
+    agency.type === AGENCY_TYPE.HYBRID
+);
+
+const apiAgencies = agencies.filter(agency =>
+    agency.type === AGENCY_TYPE.API
+);
+
+const [staticResults, apiResults] = await Promise.all([
+    getStaticRates(staticAgencies, input),
+    getApiRates(apiAgencies, input)
+]);
+```
+
+Both provider calls run concurrently with `Promise.all`. The results are merged into a single flat array before being returned to the controller.
+
+| Provider | Data Source | Latency Profile |
+|---|---|---|
+| **Static** | In-memory `Map` built from MongoDB at startup | Sub-millisecond lookups (O(1)) |
+| **API** | Live HTTP requests to external carrier endpoints | Network-bound; per-carrier timeouts apply |
+
+## In-Memory Caching Layer
+
+To avoid repeated database queries on every rate comparison, `cache.service.js` loads all zones, zone rules, rates, and pallet types from MongoDB once at server startup and indexes them into a hierarchy of `Map` objects, one per agency.
+
+```javascript
+// api/src/api/services/cache.service.js
+function createAgencyStore() {
+    return {
+        zonesById:           new Map(),  // zoneId  → Zone
+        zonesByName:         new Map(),  // name    → Zone
+        palletTypesById:     new Map(),  // id      → PalletType
+        sortedPalletTypes:   [],         // sorted by maxWeight, then maxHeight
+        ratesByKey:          new Map(),  // "type|zoneName|palletTypeId" → Rate
+        zoneRulesByProvince: new Map(),  // provinceCode → ZoneRule[]
+        zoneRulesByPostal:   new Map()   // provinceCode → Map(postalCode → ZoneRule)
+    };
+}
+```
+
+The `ratesByKey` map uses a composite key `"type|zoneName|palletTypeId"` so a specific rate document can be retrieved in O(1) without scanning any arrays. `sortedPalletTypes` is pre-sorted by `maxWeight` then `maxHeight` so the pallet-matching algorithm only needs a single linear pass.
+
+<Note>
+  If `getAgencyTariffs()` is called before `loadAgencyTariffs()` has completed, it throws `"Data store not initialized"`. The bootstrap sequence ensures loading completes before the HTTP server starts accepting connections.
+</Note>
+
+## Bootstrap and Seed Process
+
+On first run the database is empty. The `npm run seed` command executes `bootstrap.js`, which sequentially seeds agencies, zones, pallet types, and rates for each bundled carrier.
+
+```javascript
+// api/src/lib/bootstrap/bootstrap.js
+async function bootstrap() {
+    await agencies();           // insert Agency documents
+
+    await zonesCayco();         // zones for Cayco
+    await zonesTecum();         // zones for Tecum
+
+    await palletTypesCayco();   // pallet type definitions for Cayco
+    await palletTypesTecum();   // pallet type definitions for Tecum
+
+    await ratesCayco();         // rate tariff rows for Cayco
+    await ratesTecum();         // rate tariff rows for Tecum
+
+    await ratesCorreos();       // Correos Express rates
+    await zonesCorreos();
+
+    await rateMrw();            // MRW rates
+    await zoneMrw();
+}
+```
+
+The seed data is fully deterministic — running it multiple times is safe because each loader uses upsert semantics. After seeding, restart the API so `loadAgencyTariffs()` picks up the new documents.
+
+## React Frontend
+
+The `web/` directory contains a React 18 + Vite application. It connects to the API through a single Axios instance whose `baseURL` is injected at build time via the `VITE_API_URL` environment variable.
+
+```bash
+# web/.env
+VITE_API_URL=http://localhost:3000/api/v1
+VITE_APP_TITLE=Ship Quote
+```
+
+```javascript
+// web/src/services/api-services.js  (simplified)
+import axios from 'axios';
+
+const client = axios.create({
+    baseURL: import.meta.env.VITE_API_URL ?? 'http://localhost:3000/api/v1'
+});
+
+export const locationsProvinces  = ()     => client.get('/locations/provinces');
+export const locationsCountries  = ()     => client.get('/locations/countries');
+export const compareRate         = (data) => client.post('/rates/compareByPostalCode', data);
+```
+
+In production, the Docker multi-stage build compiles the Vite output to `/dist` and the API's Express server serves those static files. During local development both processes run independently: `npm run dev` in `api/` (port 3000) and `npm run dev` in `web/` (port 5173).
+
+## Observability Stack
+
+The `infra/monitoring/` directory contains Docker Compose service definitions for the optional logging and metrics pipeline.
+
+<CardGroup cols={2}>
+  <Card title="Loki" icon="database">
+    Log aggregation backend. The Express API's Winston logger ships structured JSON logs to Loki via Promtail.
+  </Card>
+  <Card title="Promtail" icon="arrow-right">
+    Log collection agent. Reads Docker container logs and forwards them to Loki.
+  </Card>
+  <Card title="Grafana" icon="chart-line">
+    Visualisation layer on top of Loki. Accessible at `http://localhost:3001` when the full Docker Compose stack is running.
+  </Card>
+  <Card title="Morgan" icon="file-text">
+    HTTP request logger middleware wired into Express that emits per-request log lines in a format compatible with the Loki pipeline.
+  </Card>
+</CardGroup>
+
+Start the full stack with a single command:
+
+```bash
+docker-compose up -d
+# API      → http://localhost:3000
+# Web      → http://localhost:5173
+# MongoDB  → mongodb://localhost:27017
+# Grafana  → http://localhost:3001
+# Loki     → http://localhost:3100
+```

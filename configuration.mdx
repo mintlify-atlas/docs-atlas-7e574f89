@@ -1,0 +1,202 @@
+---
+title: "Environment Variable Configuration Reference for Ship Quote"
+sidebarTitle: "Configuration"
+description: "Complete reference for every Ship Quote API and web environment variable, including scope detection, external API keys, and volume defaults."
+---
+
+Ship Quote reads all runtime configuration from environment variables. Neither the API nor the web frontend ships with hard-coded secrets — every connection string, API key, and behavioural flag is supplied through a `.env` file that you create from the provided example. This page documents every variable, its default value, and the effect it has on the system.
+
+## Copying the example files
+
+Both the `api/` and `web/` packages include an `.env.example` file. Copy them before starting either service:
+
+```bash
+# API
+cd api && cp .env.example .env
+
+# Web frontend
+cd web && cp .env.example .env
+```
+
+Edit each `.env` file with values appropriate for your environment before running `npm run dev` or `npm run seed`.
+
+---
+
+## API environment variables
+
+The API reads its environment with Node's native `--env-file` flag (no `dotenv` package needed at runtime). All variables below live in `api/.env`.
+
+### Server
+
+<ParamField body="PORT" type="number" default="3000">
+  The port Express listens on. Change this if 3000 is already in use on your machine. The web frontend must point its `VITE_API_URL_DEV` at the same port.
+</ParamField>
+
+<ParamField body="NODE_ENV" type="string" default="development">
+  Runtime environment. Accepted values are `development`, `production`, and `test`. When set to `test`, the database connection switches to `MONGODB_URI_TEST` automatically. Setting `production` disables certain development-only middleware.
+</ParamField>
+
+<ParamField body="CORS_ORIGIN" type="string" default="http://localhost:5173">
+  The origin that the CORS middleware allows. Set this to the URL of your web frontend in production to restrict cross-origin requests.
+</ParamField>
+
+### Database
+
+<ParamField body="MONGODB_URI" type="string" required>
+  The MongoDB connection string used in `development` and `production` environments. The server will fail to start if this is not set and no fallback is configured.
+
+  ```
+  MONGODB_URI=mongodb://127.0.0.1:27017/shipQuote-db
+  ```
+</ParamField>
+
+<ParamField body="MONGODB_URI_TEST" type="string">
+  A separate MongoDB connection string used exclusively when `NODE_ENV=test`. Keeping test data isolated prevents the seed and integration tests from affecting your development database.
+
+  ```
+  MONGODB_URI_TEST=mongodb://127.0.0.1:27017/shipQuote-db_test
+  ```
+</ParamField>
+
+### Scope detection
+
+<ParamField body="DEFAULT_COUNTRY" type="string" default="ES">
+  An ISO 3166-1 alpha-2 country code that defines your home country. This single variable drives the entire national vs. international classification:
+
+  ```javascript
+  // api/src/lib/constants/scopes.zone.js
+  export function getScope(countryCode) {
+    return countryCode === process.env.DEFAULT_COUNTRY
+      ? SCOPE_TYPES.NATIONAL       // 'national'
+      : SCOPE_TYPES.INTERNATIONAL; // 'international'
+  }
+  ```
+
+  When a rate comparison request arrives with `"countryCode": "ES"` and `DEFAULT_COUNTRY=ES`, the shipment is classified as **national** and only carriers with `"national"` in their `rules.coverage` array are queried. Any other country code produces an **international** scope.
+
+  Change this to match the country where your logistics operation is based (e.g. `FR` for France, `DE` for Germany).
+</ParamField>
+
+### Logging
+
+<ParamField body="LOG_LEVEL" type="string" default="info">
+  Controls the minimum severity level emitted by the Winston logger. Accepted values (lowest to highest verbosity): `error`, `warn`, `info`, `debug`. Use `debug` during development to see every provider call; use `warn` or `error` in production to reduce log volume. Log output is structured JSON compatible with Loki/Promtail/Grafana.
+</ParamField>
+
+### Volume defaults
+
+<ParamField body="DEFAULT_PALLET_VOLUME" type="number" default="1000000">
+  Default maximum volumetric capacity (in cm³) used when a pallet type does not specify its own volume constraint. The value `1000000` corresponds to a 100 cm × 100 cm × 100 cm cube.
+</ParamField>
+
+<ParamField body="DEFAULT_PARCEL_VOLUME" type="number" default="6000">
+  Default maximum volumetric capacity (in cm³) for parcel shipments. Used by the validation layer when no per-carrier parcel constraint is defined.
+</ParamField>
+
+### Countries API (optional enrichment)
+
+<ParamField body="COUNTRIES_API_ENABLED" type="boolean" default="false">
+  When `true`, Ship Quote fetches country name translations from an external REST Countries service on startup instead of relying solely on seeded data. Leave this `false` unless you need multilingual country names beyond those included in the bootstrap dataset.
+</ParamField>
+
+<ParamField body="COUNTRIES_URL" type="string">
+  The URL of the external countries API, used only when `COUNTRIES_API_ENABLED=true`.
+</ParamField>
+
+<ParamField body="COUNTRIES_API_KEY" type="string">
+  API key for the countries enrichment service, if required by the endpoint specified in `COUNTRIES_URL`.
+</ParamField>
+
+### External carrier API keys
+
+These keys are passed to the carrier adapter layer. If a key is missing or empty, the corresponding carrier is **silently skipped** — no error is raised and all other carriers still return their rates normally.
+
+<ParamField body="DACHSER_API_KEY" type="string">
+  Authentication key for the Dachser live quoting API. Dachser is an `api`-type carrier; without this key it will not appear in rate comparison responses.
+
+  ```
+  DACHSER_API_KEY=your_dachser_key_here
+  ```
+</ParamField>
+
+<ParamField body="DACHSER_API_N_CUSTOMER" type="string">
+  Dachser customer number used alongside the API key when authenticating requests to the Dachser quoting endpoint.
+</ParamField>
+
+<ParamField body="DHL_API_KEY" type="string">
+  Reserved for the DHL carrier adapter. The variable is defined in the configuration schema for future use; no DHL adapter is active in the current release.
+</ParamField>
+
+<ParamField body="FEDEX_API_KEY" type="string">
+  Reserved for the FedEx carrier adapter. The variable is defined in the configuration schema for future use; no FedEx adapter is active in the current release.
+</ParamField>
+
+<Warning>
+  Never commit a populated `api/.env` file to version control. The `.env.example` file exists precisely so secrets stay out of the repository. Add `.env` to `.gitignore` if it is not already there.
+</Warning>
+
+---
+
+## Web environment variables
+
+The React + Vite frontend reads variables prefixed with `VITE_` at build time. All variables below live in `web/.env`.
+
+<ParamField body="VITE_API_URL_DEV" type="string" default="http://localhost:3000/api/v1">
+  The base URL the Axios client uses when `VITE_NODE_ENV=test` (i.e. local development). Point this at wherever your API is running, including any non-default port.
+
+  ```
+  VITE_API_URL_DEV=http://localhost:3000/api/v1
+  ```
+</ParamField>
+
+<ParamField body="VITE_API_URL_PROD" type="string" default="/api/v1">
+  The base URL used in production builds. The default value `/api/v1` is a relative path, which works when the API and the built frontend are served from the same origin (e.g. the API serves the `web/dist` folder at its root).
+
+  ```
+  VITE_API_URL_PROD=/api/v1
+  ```
+</ParamField>
+
+<ParamField body="VITE_NODE_ENV" type="string" default="test">
+  Controls which API URL the frontend uses. When set to `test` the frontend reads `VITE_API_URL_DEV`; in all other values it falls back to `VITE_API_URL_PROD`.
+</ParamField>
+
+---
+
+## Complete variable reference
+
+The table below is a quick-reference summary of every variable across both packages.
+
+| Variable | Package | Required | Default | Purpose |
+|---|---|---|---|---|
+| `PORT` | api | No | `3000` | Express listen port |
+| `NODE_ENV` | api | No | `development` | Runtime environment; switches DB URI when `test` |
+| `CORS_ORIGIN` | api | No | `http://localhost:5173` | Allowed CORS origin |
+| `MONGODB_URI` | api | **Yes** | — | Main MongoDB connection string |
+| `MONGODB_URI_TEST` | api | No | — | Test database connection string |
+| `DEFAULT_COUNTRY` | api | No | `ES` | ISO-2 code for national scope detection |
+| `LOG_LEVEL` | api | No | `info` | Winston log severity threshold |
+| `DEFAULT_PALLET_VOLUME` | api | No | `1000000` | Fallback pallet volume cap (cm³) |
+| `DEFAULT_PARCEL_VOLUME` | api | No | `6000` | Fallback parcel volume cap (cm³) |
+| `COUNTRIES_API_ENABLED` | api | No | `false` | Enable external country name enrichment |
+| `COUNTRIES_URL` | api | No | — | External countries API endpoint |
+| `COUNTRIES_API_KEY` | api | No | — | Key for external countries API |
+| `DACHSER_API_KEY` | api | No | — | Dachser live API authentication key |
+| `DACHSER_API_N_CUSTOMER` | api | No | — | Dachser customer number |
+| `DHL_API_KEY` | api | No | — | Reserved for future DHL adapter |
+| `FEDEX_API_KEY` | api | No | — | Reserved for future FedEx adapter |
+| `VITE_API_URL_DEV` | web | No | `http://localhost:3000/api/v1` | API base URL for local development |
+| `VITE_API_URL_PROD` | web | No | `/api/v1` | API base URL for production builds |
+| `VITE_NODE_ENV` | web | No | `test` | Selects dev vs. prod API URL |
+
+---
+
+## Behaviour when carrier keys are omitted
+
+Ship Quote is designed to degrade gracefully when external API keys are not present:
+
+- If `DACHSER_API_KEY` is empty, the Dachser carrier adapter is never invoked. The agency does not appear in rate comparison responses — there is no error, warning, or partial result for it.
+- Static carriers (Cayco, Tecum, MRW, Correosexpress) rely entirely on MongoDB data and are unaffected by missing API keys.
+- `DHL_API_KEY` and `FEDEX_API_KEY` are reserved variable names; no adapters for those carriers exist yet, so their presence or absence has no effect on the current release.
+
+This means you can run a fully functional local environment with zero carrier API keys — you will receive quotes from all static carriers as long as the database has been seeded with `npm run seed`.

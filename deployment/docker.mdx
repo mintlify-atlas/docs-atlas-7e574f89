@@ -1,0 +1,217 @@
+---
+title: "Docker Compose Deployment for Ship Quote API"
+sidebarTitle: "Docker"
+description: "Run the full Ship Quote stack — API, MongoDB, Loki, Promtail, and Grafana — with a single Docker Compose command in under a minute."
+---
+
+Ship Quote ships with a complete `docker-compose.yml` that stands up every layer of the stack in one command: the Node.js/Express API serving the built React frontend, a MongoDB 8 database, and the full Loki/Promtail/Grafana observability pipeline. No manual dependency management or external services are required — everything runs in isolated containers connected by a shared Docker network.
+
+## Prerequisites
+
+- **Docker Desktop** (or Docker Engine + Compose plugin) installed and running
+- **Docker Compose v2+** (`docker compose version` to verify)
+- Ports `8082`, `3001`, `3100`, and `27017` available on your host machine
+
+## Service Overview
+
+<CardGroup cols={2}>
+  <Card title="API (ship-quote-app-dev)" icon="server">
+    Express 5 server serving both the REST API and the compiled React frontend. Built from the local `Dockerfile` with the `VITE_API_URL_PROD=/api/v1` build argument.
+  </Card>
+  <Card title="MongoDB (ship-quote-mongo-dev)" icon="database">
+    Official `mongo:8` image. Data is persisted in the named volume `mongo_data_dev` so it survives container restarts.
+  </Card>
+  <Card title="Loki (ship-quote-loki)" icon="archive">
+    Grafana Loki `3.6.6` — the log aggregation backend. Ingests structured JSON logs pushed by Promtail and stores them on the `loki_data` volume.
+  </Card>
+  <Card title="Promtail (ship-quote-promtail)" icon="paper-plane">
+    Grafana Promtail `3.6.10` — reads Docker container logs from the host and forwards them to Loki. Mounts `/var/lib/docker/containers` read-only.
+  </Card>
+  <Card title="Grafana (ship-quote-grafana)" icon="chart-line">
+    Grafana `10.4.0` for log visualization and dashboards. Default credentials: `admin` / `admin`.
+  </Card>
+</CardGroup>
+
+## Port Mappings
+
+| Service | Host Address | Container Port | Notes |
+|---------|-------------|---------------|-------|
+| API | `http://localhost:8082` | `3000` | Also serves the React frontend at `/` |
+| Grafana | `http://localhost:3001` | `3000` | Login: `admin` / `admin` |
+| Loki | `http://localhost:3100` | `3100` | Loki HTTP API |
+| MongoDB | `mongodb://localhost:27017` | `27017` | No auth in dev mode |
+
+## Starting the Stack
+
+<Steps>
+  <Step title="Clone the repository and navigate to the project root">
+    All Docker commands must be run from the directory containing `docker-compose.yml`.
+
+    ```bash
+    git clone <repo-url>
+    cd ship-quote
+    ```
+  </Step>
+
+  <Step title="Build and start all services">
+    Use `--build` on the first run (or after any code change) to compile the images:
+
+    ```bash
+    docker-compose up --build
+    ```
+
+    To start in **detached mode** after the initial build:
+
+    ```bash
+    docker-compose up -d
+    ```
+
+    Docker Compose resolves the `depends_on` chain automatically: MongoDB and Loki start first, then the API and Promtail, then Grafana.
+  </Step>
+
+  <Step title="Verify the API is healthy">
+    Once the containers are running, confirm the API responds:
+
+    ```bash
+    curl http://localhost:8082/api/v1/agencies
+    ```
+
+    You should receive a `200 OK` with a JSON array (empty `[]` on a fresh database).
+  </Step>
+
+  <Step title="Open Grafana">
+    Navigate to [http://localhost:3001](http://localhost:3001) and log in with `admin` / `admin`. See the [Monitoring](/deployment/monitoring) guide for configuring the Loki data source.
+  </Step>
+
+  <Step title="Seed the database (optional)">
+    Load the bootstrap dataset into MongoDB from inside the API container:
+
+    ```bash
+    docker-compose exec app npm run seed
+    ```
+  </Step>
+</Steps>
+
+## Common Commands
+
+<CodeGroup>
+```bash Start (detached)
+docker-compose up -d
+```
+
+```bash Rebuild and start
+docker-compose up --build
+```
+
+```bash Stream API logs
+docker-compose logs -f app
+```
+
+```bash Stop all services
+docker-compose down
+```
+</CodeGroup>
+
+<Tip>
+  Pass a service name to `docker-compose logs -f` to tail only that container — for example `docker-compose logs -f mongo` or `docker-compose logs -f loki`.
+</Tip>
+
+To stop and **remove all volumes** (wipes the database and log data):
+
+```bash
+docker-compose down -v
+```
+
+<Warning>
+  `docker-compose down -v` permanently deletes the `mongo_data_dev`, `loki_data`, and `grafana_data` volumes. Use it only when you want a completely clean slate.
+</Warning>
+
+## The Multi-Stage Dockerfile
+
+The `Dockerfile` uses a two-stage build to produce a single, lean production image that serves both the API and the React frontend.
+
+```dockerfile
+# ── Stage 1: Build the React frontend ──────────────────────────────────────
+FROM node:24 AS builder
+
+ARG VITE_API_URL_PROD
+ENV VITE_API_URL_PROD=$VITE_API_URL_PROD
+
+COPY ./web /opt/web
+WORKDIR /opt/web
+RUN npm i
+RUN npm run build
+
+# ── Stage 2: Production API image ───────────────────────────────────────────
+FROM node:24-alpine
+
+COPY ./api /opt/ship-api
+WORKDIR /opt/ship-api
+RUN npm i --omit=dev
+COPY --from=builder /opt/web/dist /opt/ship-api/web/build
+
+EXPOSE 3000
+
+CMD ["npm", "start"]
+```
+
+**Stage 1 (`builder`):** Installs all frontend dependencies and runs `vite build`. The `VITE_API_URL_PROD` build argument is baked in at build time — the Docker Compose file passes `/api/v1` so the frontend always calls the same container's API endpoint rather than a hardcoded hostname.
+
+**Stage 2 (production):** Starts from the smaller `node:24-alpine` base, copies only the API source, installs production dependencies (skipping `devDependencies` with `--omit=dev`), and then copies the compiled React assets from Stage 1 into `web/build`. The Express server serves these static files directly, so no separate web server is needed.
+
+### Build Argument Reference
+
+| Argument | Value in Compose | Purpose |
+|----------|-----------------|---------|
+| `VITE_API_URL_PROD` | `/api/v1` | Relative base URL used by the React app in production builds. A relative path works because the frontend and API are served from the same origin (`localhost:8082`). |
+
+## Environment Variables
+
+The `app` service in `docker-compose.yml` receives the following environment variables at runtime:
+
+```yaml
+environment:
+  NODE_ENV: production
+  PORT: 3000
+  MONGODB_URI: mongodb://mongo:27017/shipQuote-db
+```
+
+| Variable | Value | Description |
+|----------|-------|-------------|
+| `NODE_ENV` | `production` | Activates production-mode Express settings and switches the HTTP logger from Morgan's `dev` format to the structured Winston/JSON transport. |
+| `PORT` | `3000` | The port Express listens on inside the container (mapped to `8082` on the host). |
+| `MONGODB_URI` | `mongodb://mongo:27017/shipQuote-db` | Connection string using Docker's internal DNS — `mongo` resolves to the MongoDB container. |
+
+<Note>
+  The `LOG_LEVEL` environment variable is not set in the Compose file, so it defaults to `info`. To enable debug logging temporarily, add `LOG_LEVEL: debug` under the `app` service's `environment` block and recreate the container with `docker-compose up -d app`.
+</Note>
+
+## Log Rotation
+
+The `app` service configures Docker's `json-file` logging driver with automatic rotation to prevent unbounded disk usage:
+
+```yaml
+logging:
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+```
+
+Docker keeps at most **3 log files of 10 MB each** (30 MB total) per container rotation cycle. Promtail reads these rotated files from `/var/lib/docker/containers` on the host and ships them to Loki before they are evicted.
+
+## .dockerignore
+
+The `.dockerignore` file prevents unnecessary files from being sent to the Docker build context, speeding up builds:
+
+```
+.git
+
+api/node_modules
+
+web/node_modules
+web/dist
+web/.env
+```
+
+`node_modules` directories are excluded because both stages run `npm install` inside the container. The pre-built `web/dist` folder is also excluded — Stage 1 always performs a fresh build, so a local dist would be stale and ignored anyway.

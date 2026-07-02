@@ -1,20 +1,79 @@
 ---
-title: "Introduction"
-description: "Welcome to your project"
+title: "Ship Quote: Multi-Carrier Shipping Rate Comparison API"
+sidebarTitle: "Home"
+description: "Ship Quote is a MERN-stack API that fetches and compares shipping rates from multiple carrier agencies — both static DB rates and live external APIs — in a single request."
 ---
 
-Write a short description of your product here. What it does, who it's for, and what they can accomplish with it.
+Ship Quote gives developers a unified REST API to compare shipping costs across multiple carrier agencies in one call. Submit a shipment (pallets, parcels, or a mix) with a destination postal code or province code, and the engine fans out to every configured carrier — querying static database rates and live external APIs in parallel — then returns normalized, side-by-side quotes.
 
-<Tip>
-  Ready to make this your own? Start by editing this page. Update your `docs.json` file to customize your site. Then fill out the [Quickstart](/quickstart) page.
-</Tip>
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get a running API and your first rate comparison in under five minutes.
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration">
+    Configure environment variables, database connection, and carrier API keys.
+  </Card>
+  <Card title="Rate Engine" icon="bolt" href="/architecture/rate-engine">
+    Understand how Ship Quote resolves zones, calculates surcharges, and normalizes responses.
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/rates/compare-by-postal-code">
+    Full reference for every endpoint — request schemas, response shapes, and error codes.
+  </Card>
+</CardGroup>
 
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  This card links to the quickstart page in your project.
-</Card>
-<Card title="Components" icon="puzzle-piece" href="https://mintlify.com/docs/components">
-  Add cards, callouts, steps, tabs, and more to design and structure your pages.
-</Card>
-<Card title="Settings" icon="gear" href="https://mintlify.com/docs/organize/settings">
-  Set your site name, branding, and navigation in the `docs.json` file.
-</Card>
+## How It Works
+
+Ship Quote sits between your application and your carrier accounts. You send one request; the API handles the rest.
+
+<Steps>
+  <Step title="Submit a shipment">
+    POST to `/api/v1/rates/compareByPostalCode` with a destination postal code, country code, and a list of items (pallets or parcels with weight and dimensions).
+  </Step>
+  <Step title="Scope detection">
+    The engine automatically classifies the shipment as **national** or **international** based on the destination country code, then filters to only the carriers that cover that scope.
+  </Step>
+  <Step title="Parallel rate fetching">
+    Static carriers are queried from the in-memory MongoDB-backed rate tables. API carriers (e.g. Dachser) are called concurrently via their configured external endpoints.
+  </Step>
+  <Step title="Normalized response">
+    Every carrier's result is normalized into the same structure: agency name, zone, available services, itemized price breakdown, and any surcharges or incidents.
+  </Step>
+</Steps>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Dual-Provider Engine" icon="layer-group">
+    Queries static database rates and live carrier APIs in parallel. A failure in one carrier never blocks results from others.
+  </Card>
+  <Card title="Pallet & Parcel Support" icon="box">
+    Full dimension and weight validation for both pallet and parcel shipment types, with automatic pallet type classification.
+  </Card>
+  <Card title="Dynamic Surcharges" icon="percent">
+    Configurable fuel surcharges, weight overages, and dimension-based supplements per agency — calculated automatically on every quote.
+  </Card>
+  <Card title="O(1) Lookups" icon="gauge-high">
+    Zone and rate data is loaded into in-memory Maps at startup, giving near-instant lookups on every request without extra database round trips.
+  </Card>
+  <Card title="Geographic Resolution" icon="map-pin">
+    Resolve postal codes to provinces automatically, or pass a province code directly. Supports Spain-wide coverage with per-postal-code zone exceptions.
+  </Card>
+  <Card title="Built-in Observability" icon="chart-line">
+    Winston-based structured logging forwarded to Loki via Promtail, visualized in a Grafana dashboard — all wired up in Docker Compose.
+  </Card>
+</CardGroup>
+
+## Technology Stack
+
+| Layer | Technology |
+|-------|-----------|
+| **API** | Node.js 18+, Express 5, Mongoose 9 |
+| **Database** | MongoDB 4.4+ |
+| **Frontend** | React 19, Vite, Tailwind CSS |
+| **Testing** | Vitest, Supertest |
+| **Observability** | Winston, Loki, Promtail, Grafana |
+| **Containers** | Docker, Docker Compose |
+
+<Note>
+  Ship Quote v2.0 uses the `luma` theme and follows the OpenAPI 3.0 specification. An interactive Swagger UI is served at `/api-docs` when the API server is running.
+</Note>

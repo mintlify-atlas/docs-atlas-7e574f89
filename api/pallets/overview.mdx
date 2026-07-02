@@ -1,0 +1,344 @@
+---
+title: "Pallet Types API — Create, List & Manage Pallets"
+sidebarTitle: "Pallet Types"
+description: "Full reference for the /api/v1/pallets endpoints. Create, list, retrieve, and delete pallet type definitions used by the Ship Quote rate engine."
+---
+
+Pallet types define the named size-and-weight categories that the Ship Quote rate engine uses to classify an incoming shipment. Each agency configures its own set of pallet types — for example, Cayco uses seven tiers from **MINI** (150 kg) through **SUPER** (1 200 kg), while Tecum defines formats such as **QUARTER PALLET** and **FULL PALLET**. When a quote request arrives, the engine matches the item's dimensions and weight against these constraints to select the correct base price row from the agency's rate table.
+
+<Note>
+  Pallet types are agency-scoped. Each `PalletType` document is linked to a single agency via `agencyId`. The rate engine queries only the pallet types that belong to the agency being evaluated, then walks the list in order of increasing `maxWeight` to find the smallest tier that fits the shipment.
+</Note>
+
+---
+
+## POST /api/v1/pallets
+
+Create a new pallet type for an agency.
+
+### Request body
+
+<ParamField body="agencyId" type="string" required>
+  MongoDB ObjectId of the agency this pallet type belongs to. Must reference an existing agency document.
+</ParamField>
+
+<ParamField body="name" type="string" required>
+  Human-readable label for the tier (max 60 characters). Examples from live data: `"MINI"`, `"CUARTO"`, `"PLUMA"`, `"QUARTER PALLET"`, `"FULL PALLET"`, `"EURO PALLET"`.
+</ParamField>
+
+<ParamField body="constraints" type="object" required>
+  Physical limits that define this tier. The rate engine uses `maxWeight` to select the tier; dimension fields default to `0` when omitted (meaning no dimensional limit is enforced).
+
+  <Expandable title="constraints fields">
+    <ParamField body="constraints.maxWeight" type="number" required>
+      Maximum gross weight in kilograms. Must be greater than `0`.
+    </ParamField>
+
+    <ParamField body="constraints.maxHeight" type="number">
+      Maximum stacking height in centimetres. Defaults to `0` (no limit).
+    </ParamField>
+
+    <ParamField body="constraints.maxLength" type="number">
+      Maximum length in centimetres. Defaults to `0` (no limit).
+    </ParamField>
+
+    <ParamField body="constraints.maxWidth" type="number">
+      Maximum width in centimetres. Defaults to `0` (no limit).
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Response — 201 Created
+
+<ResponseField name="id" type="string">
+  MongoDB ObjectId of the newly created pallet type.
+</ResponseField>
+
+<ResponseField name="agencyId" type="string">
+  ObjectId of the owning agency.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Pallet type label as stored.
+</ResponseField>
+
+<ResponseField name="constraints" type="object">
+  The physical limits that were saved.
+
+  <Expandable title="constraints fields">
+    <ResponseField name="constraints.maxWeight" type="number">
+      Max weight in kg.
+    </ResponseField>
+    <ResponseField name="constraints.maxHeight" type="number">
+      Max height in cm.
+    </ResponseField>
+    <ResponseField name="constraints.maxLength" type="number">
+      Max length in cm.
+    </ResponseField>
+    <ResponseField name="constraints.maxWidth" type="number">
+      Max width in cm.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 timestamp of creation.
+</ResponseField>
+
+<ResponseField name="updatedAt" type="string">
+  ISO 8601 timestamp of last update.
+</ResponseField>
+
+### Examples
+
+<CodeGroup>
+
+```bash Cayco — CUARTO pallet
+curl -X POST http://localhost:3000/api/v1/pallets \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agencyId": "507f1f77bcf86cd799439011",
+    "name": "CUARTO",
+    "constraints": {
+      "maxWeight": 300,
+      "maxLength": 120,
+      "maxWidth": 100,
+      "maxHeight": 80
+    }
+  }'
+```
+
+```bash Tecum — QUARTER PALLET
+curl -X POST http://localhost:3000/api/v1/pallets \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agencyId": "507f1f77bcf86cd799439022",
+    "name": "QUARTER PALLET",
+    "constraints": {
+      "maxWeight": 300,
+      "maxLength": 120,
+      "maxWidth": 120,
+      "maxHeight": 110
+    }
+  }'
+```
+
+```json 201 Response
+{
+  "id": "684a2f9cbe1234567890abcd",
+  "agencyId": "507f1f77bcf86cd799439011",
+  "name": "CUARTO",
+  "constraints": {
+    "maxWeight": 300,
+    "maxLength": 120,
+    "maxWidth": 100,
+    "maxHeight": 80
+  },
+  "createdAt": "2026-06-18T10:30:00.000Z",
+  "updatedAt": "2026-06-18T10:30:00.000Z"
+}
+```
+
+</CodeGroup>
+
+---
+
+## GET /api/v1/pallets
+
+Return all pallet types across all agencies. Returns `404` when no documents exist in the collection.
+
+### Response — 200 OK
+
+An array of pallet type objects. Each object has the same shape as the `POST` 201 response above.
+
+### Example
+
+<CodeGroup>
+
+```bash cURL
+curl -X GET http://localhost:3000/api/v1/pallets
+```
+
+```json 200 Response
+[
+  {
+    "id": "684a2f9cbe1234567890abcd",
+    "agencyId": "507f1f77bcf86cd799439011",
+    "name": "MINI",
+    "constraints": {
+      "maxWeight": 150,
+      "maxLength": 120,
+      "maxWidth": 100,
+      "maxHeight": 60
+    },
+    "createdAt": "2026-06-18T10:30:00.000Z",
+    "updatedAt": "2026-06-18T10:30:00.000Z"
+  },
+  {
+    "id": "684a2f9cbe1234567890abce",
+    "agencyId": "507f1f77bcf86cd799439011",
+    "name": "CUARTO",
+    "constraints": {
+      "maxWeight": 300,
+      "maxLength": 120,
+      "maxWidth": 100,
+      "maxHeight": 80
+    },
+    "createdAt": "2026-06-18T10:30:00.000Z",
+    "updatedAt": "2026-06-18T10:30:00.000Z"
+  },
+  {
+    "id": "684a2f9cbe1234567890abcf",
+    "agencyId": "507f1f77bcf86cd799439022",
+    "name": "QUARTER PALLET",
+    "constraints": {
+      "maxWeight": 300,
+      "maxLength": 120,
+      "maxWidth": 120,
+      "maxHeight": 110
+    },
+    "createdAt": "2026-06-18T10:30:00.000Z",
+    "updatedAt": "2026-06-18T10:30:00.000Z"
+  },
+  {
+    "id": "684a2f9cbe1234567890abd0",
+    "agencyId": "507f1f77bcf86cd799439022",
+    "name": "FULL PALLET",
+    "constraints": {
+      "maxWeight": 1200,
+      "maxLength": 120,
+      "maxWidth": 100,
+      "maxHeight": 220
+    },
+    "createdAt": "2026-06-18T10:30:00.000Z",
+    "updatedAt": "2026-06-18T10:30:00.000Z"
+  }
+]
+```
+
+</CodeGroup>
+
+---
+
+## GET /api/v1/pallets/:palletTypeId
+
+Retrieve the details of a single pallet type by its MongoDB ObjectId.
+
+### Path parameters
+
+<ParamField path="palletTypeId" type="string" required>
+  MongoDB ObjectId of the pallet type to retrieve.
+</ParamField>
+
+### Response — 200 OK
+
+A single pallet type object (same shape as the `POST` 201 response).
+
+### Error responses
+
+| Status | Condition |
+|--------|-----------|
+| `404 Not Found` | No pallet type document exists with the given `palletTypeId`. |
+
+### Example
+
+<CodeGroup>
+
+```bash cURL
+curl -X GET http://localhost:3000/api/v1/pallets/684a2f9cbe1234567890abcd
+```
+
+```json 200 Response
+{
+  "id": "684a2f9cbe1234567890abcd",
+  "agencyId": "507f1f77bcf86cd799439011",
+  "name": "PLUMA",
+  "constraints": {
+    "maxWeight": 300,
+    "maxLength": 120,
+    "maxWidth": 80,
+    "maxHeight": 220
+  },
+  "createdAt": "2026-06-18T10:30:00.000Z",
+  "updatedAt": "2026-06-18T10:30:00.000Z"
+}
+```
+
+```json 404 Response
+{
+  "message": "Pallet not found"
+}
+```
+
+</CodeGroup>
+
+---
+
+## DELETE /api/v1/pallets/:palletTypeId
+
+Permanently delete a pallet type. The rate engine will no longer be able to classify shipments that were previously matched against this tier, so remove with care.
+
+### Path parameters
+
+<ParamField path="palletTypeId" type="string" required>
+  MongoDB ObjectId of the pallet type to delete.
+</ParamField>
+
+### Response — 204 No Content
+
+Empty body on success.
+
+### Error responses
+
+| Status | Condition |
+|--------|-----------|
+| `404 Not Found` | No pallet type document exists with the given `palletTypeId`. |
+
+<Warning>
+  Deleting a pallet type does not cascade to existing rate documents that reference it. If you remove a tier that is actively used by the rate table of an agency, that agency's pricing will be incomplete for shipments that fall into the deleted tier.
+</Warning>
+
+### Example
+
+<CodeGroup>
+
+```bash cURL
+curl -X DELETE http://localhost:3000/api/v1/pallets/684a2f9cbe1234567890abcd
+```
+
+```text 204 Response
+(empty body)
+```
+
+</CodeGroup>
+
+---
+
+## Bootstrap reference — real pallet types
+
+The following tables show the pallet tiers loaded by the built-in seed data for Cayco and Tecum, giving you concrete examples of the constraint values in production use.
+
+### Cayco pallet types
+
+| Name | Max Weight (kg) | Max Length (cm) | Max Width (cm) | Max Height (cm) |
+|------|---------------:|----------------:|---------------:|----------------:|
+| MINI | 150 | 120 | 100 | 60 |
+| CUARTO | 300 | 120 | 100 | 80 |
+| PLUMA | 300 | 120 | 80 | 220 |
+| MEDIO | 450 | 120 | 100 | 180 |
+| LIGERO | 600 | 120 | 100 | 220 |
+| COMPLETO | 800 | 120 | 100 | 180 |
+| SUPER | 1 200 | 120 | 100 | 220 |
+
+### Tecum pallet types
+
+| Name | Max Weight (kg) | Max Length (cm) | Max Width (cm) | Max Height (cm) |
+|------|---------------:|----------------:|---------------:|----------------:|
+| MINI QUARTER PALLET | 150 | 120 | 1000 | 80 |
+| MINI QUARTER PALLET *(compact)* | 150 | 60 | 80 | 120 |
+| QUARTER PALLET | 300 | 120 | 120 | 110 |
+| SUPER EURO LIGHT PALLET | 300 | 120 | 80 | 220 |
+| EXTRA LIGHT PALLET | 450 | 120 | 100 | 220 |
+| HALF PALLET | 600 | 120 | 100 | 160 |
+| EURO PALLET | 900 | 120 | 80 | 220 |
+| FULL PALLET | 1 200 | 120 | 100 | 220 |

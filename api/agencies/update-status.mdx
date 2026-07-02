@@ -1,0 +1,217 @@
+---
+title: "Update an Agency's Status — Ship Quote API Reference"
+sidebarTitle: "Update Status"
+description: "Activate or deactivate a shipping agency by ID. Excluded agencies are removed from rate comparisons while their data is fully preserved."
+---
+
+Updating an agency's status is the recommended way to temporarily remove a carrier from rate comparisons without discarding its configuration, rate tables, zones, or pallet types. A deactivated agency can be reactivated at any time by sending `active: true` in the same request body — no data migration or re-creation is required.
+
+<Note>
+  Deactivating an agency excludes it from all `POST /api/v1/rates/*` comparison results immediately. Its zone definitions, static rate tables, and pallet type records remain intact in the database and are restored to the engine as soon as the agency is reactivated.
+</Note>
+
+## Endpoint
+
+```
+PATCH /api/v1/agencies/:agencyId
+```
+
+## Path Parameters
+
+<ParamField path="agencyId" type="string" required>
+  The MongoDB ObjectId of the agency to update. Returns `404` if no agency with this ID exists, and `404` (CastError) if the value is not a valid ObjectId format.
+</ParamField>
+
+## Request Body
+
+<ParamField body="active" type="boolean" required>
+  The desired activation state for the agency.
+
+  | Value | Effect |
+  |-------|--------|
+  | `true` | Agency is activated and included in rate comparisons. |
+  | `false` | Agency is deactivated and excluded from rate comparisons. |
+</ParamField>
+
+<Warning>
+  The current controller implementation toggles the `active` field to its opposite value (`!agency.active`) regardless of the value sent in the request body. Sending `active: false` on an already-inactive agency will therefore re-activate it. Plan your calls accordingly, and read the current state from `GET /api/v1/agencies` before patching if you need deterministic behaviour.
+</Warning>
+
+## Response
+
+A successful request returns HTTP **200 OK** with the full updated agency document.
+
+<ResponseField name="id" type="string">
+  MongoDB ObjectId of the agency.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Title-cased agency name.
+</ResponseField>
+
+<ResponseField name="code" type="string">
+  Normalised slug identifier.
+</ResponseField>
+
+<ResponseField name="type" type="string">
+  Agency type: `"static"`, `"api"`, or `"hybrid"`.
+</ResponseField>
+
+<ResponseField name="active" type="boolean">
+  The new activation state after the toggle.
+</ResponseField>
+
+<ResponseField name="rules" type="object">
+  Capability and routing rules (unchanged by this endpoint).
+
+  <Expandable title="rules fields">
+    <ResponseField name="hasAndaluciaRule" type="boolean" />
+    <ResponseField name="supportsPallets" type="boolean" />
+    <ResponseField name="supportsParcels" type="boolean" />
+    <ResponseField name="coverage" type="array of strings" />
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="supplements" type="object">
+  Pricing supplements (unchanged by this endpoint).
+
+  <Expandable title="supplements.fuelSurcharge fields">
+    <ResponseField name="fuelSurcharge.enabled" type="boolean" />
+    <ResponseField name="fuelSurcharge.type" type="string" />
+    <ResponseField name="fuelSurcharge.value" type="number" />
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="apiConfig" type="object">
+  Carrier API configuration (present for `"api"` and `"hybrid"` agencies; unchanged by this endpoint).
+
+  <Expandable title="apiConfig fields">
+    <ResponseField name="baseUrlApi" type="string" />
+    <ResponseField name="timeout" type="number" />
+    <ResponseField name="apiKey" type="string" />
+    <ResponseField name="endpoints" type="object">
+      <Expandable title="endpoints fields">
+        <ResponseField name="quotations" type="string" />
+        <ResponseField name="transportOrders" type="string" />
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 creation timestamp (unchanged).
+</ResponseField>
+
+<ResponseField name="updatedAt" type="string">
+  ISO 8601 timestamp updated to reflect this change.
+</ResponseField>
+
+## Examples
+
+### Deactivate an agency
+
+The example below deactivates the Dachser agency, removing it from rate comparison results without deleting any of its configuration or rate data.
+
+<CodeGroup>
+
+```bash Request
+curl -X PATCH http://localhost:3000/api/v1/agencies/507f1f77bcf86cd799439011 \
+  -H "Content-Type: application/json" \
+  -d '{ "active": false }'
+```
+
+```json 200 OK
+{
+  "id": "507f1f77bcf86cd799439011",
+  "name": "Dachser",
+  "code": "dachser",
+  "type": "api",
+  "active": false,
+  "rules": {
+    "hasAndaluciaRule": false,
+    "supportsPallets": true,
+    "supportsParcels": false,
+    "coverage": ["national", "international"]
+  },
+  "supplements": {
+    "fuelSurcharge": {
+      "enabled": true,
+      "type": "percentage",
+      "value": 5.5
+    }
+  },
+  "apiConfig": {
+    "baseUrlApi": "https://api.dachser.com",
+    "timeout": 5000,
+    "apiKey": "sk_live_xxxxx",
+    "endpoints": {
+      "quotations": "/v2/quotations",
+      "transportOrders": "/v2/orders"
+    }
+  },
+  "createdAt": "2026-06-18T10:30:00.000Z",
+  "updatedAt": "2026-06-19T14:22:00.000Z"
+}
+```
+
+</CodeGroup>
+
+### Reactivate an agency
+
+Send the same request with `active: true` to restore the agency to the rate comparison engine.
+
+<CodeGroup>
+
+```bash Request
+curl -X PATCH http://localhost:3000/api/v1/agencies/507f1f77bcf86cd799439011 \
+  -H "Content-Type: application/json" \
+  -d '{ "active": true }'
+```
+
+```json 200 OK
+{
+  "id": "507f1f77bcf86cd799439011",
+  "name": "Dachser",
+  "code": "dachser",
+  "type": "api",
+  "active": true,
+  "rules": {
+    "hasAndaluciaRule": false,
+    "supportsPallets": true,
+    "supportsParcels": false,
+    "coverage": ["national", "international"]
+  },
+  "supplements": {
+    "fuelSurcharge": {
+      "enabled": true,
+      "type": "percentage",
+      "value": 5.5
+    }
+  },
+  "apiConfig": {
+    "baseUrlApi": "https://api.dachser.com",
+    "timeout": 5000,
+    "apiKey": "sk_live_xxxxx",
+    "endpoints": {
+      "quotations": "/v2/quotations",
+      "transportOrders": "/v2/orders"
+    }
+  },
+  "createdAt": "2026-06-18T10:30:00.000Z",
+  "updatedAt": "2026-06-19T15:05:00.000Z"
+}
+```
+
+</CodeGroup>
+
+## Error Responses
+
+<ResponseField name="404 Not Found" type="object">
+  Returned when no agency with the supplied `agencyId` exists in the database, or when the supplied value is not a valid MongoDB ObjectId (CastError).
+
+  ```json
+  {
+    "message": "Agency not found"
+  }
+  ```
+</ResponseField>

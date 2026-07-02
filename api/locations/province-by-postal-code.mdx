@@ -1,0 +1,175 @@
+---
+title: "Province by Postal Code — Ship Quote Locations API"
+sidebarTitle: "Province by Postal Code"
+description: "Resolve a Spanish postal code prefix to its province. Returns a single province object with adminFullCode for use in rate comparison calls."
+---
+
+The Province by Postal Code endpoint resolves any valid Spanish postal code to the province it belongs to. Spanish postal codes are five digits long, and the first two digits uniquely identify the province — for example, any code beginning with `28` maps to Madrid and any code beginning with `23` maps to Jaén. Ship Quote uses this lookup internally inside `POST /rates/compareByPostalCode` to derive the province before querying rate tables, but the endpoint is also useful in your own UI for autocomplete flows: accept a partial postal code from the user, call this endpoint, and display the resolved province before the user submits the full shipping request.
+
+## Endpoint
+
+```
+GET /api/v1/locations/provincesByPostalCode/:postalCode
+```
+
+## Path Parameters
+
+<ParamField path="postalCode" type="string" required>
+  A five-digit Spanish postal code (e.g. `28001`, `23700`). Only the first two
+  digits are used for the province lookup — `28001`, `28080`, and `28950` all
+  resolve to Madrid. The API validates that the value is exactly five numeric
+  digits; any other format returns a `400` error.
+
+  Common Spanish province prefixes:
+
+  | Prefix | Province       |
+  |--------|----------------|
+  | `01`   | Álava          |
+  | `02`   | Albacete       |
+  | `08`   | Barcelona      |
+  | `18`   | Granada        |
+  | `23`   | Jaén           |
+  | `28`   | Madrid         |
+  | `41`   | Sevilla        |
+  | `46`   | Valencia       |
+</ParamField>
+
+## Response
+
+Returns `HTTP 200 OK` with a single province object when a match is found.
+
+<ResponseField name="_id" type="string">
+  MongoDB ObjectId of the province document.
+</ResponseField>
+
+<ResponseField name="countryCode" type="string">
+  Uppercased ISO-2 country code. Always `ES` for the seeded dataset.
+</ResponseField>
+
+<ResponseField name="countryName" type="string">
+  Country name as stored (e.g. `Spain`).
+</ResponseField>
+
+<ResponseField name="adminCode" type="string">
+  Short administrative region code for the province (e.g. `J` for Jaén, `M`
+  for Madrid).
+</ResponseField>
+
+<ResponseField name="adminFullCode" type="string">
+  Fully-qualified province code (e.g. `ES-J`, `ES-M`). Pass this value as the
+  `province` parameter when calling `POST /rates/compareByProvinceCode`.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Display name of the province (e.g. `Jaén`, `Madrid`).
+</ResponseField>
+
+<ResponseField name="normalizedName" type="string">
+  Lowercase, accent-stripped version of the province name used for internal
+  indexing (e.g. `jaen`, `madrid`).
+</ResponseField>
+
+<ResponseField name="postalCode" type="string">
+  The two-digit prefix used as the lookup key (e.g. `23`, `28`).
+</ResponseField>
+
+<ResponseField name="type" type="string">
+  Geographic classification. Always `province` for the Spanish seed data.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 creation timestamp.
+</ResponseField>
+
+<ResponseField name="updatedAt" type="string">
+  ISO 8601 last-updated timestamp.
+</ResponseField>
+
+## Examples
+
+<CodeGroup>
+
+```bash Madrid (28)
+curl -X GET "http://localhost:3000/api/v1/locations/provincesByPostalCode/28001"
+```
+
+```bash Jaén (23)
+curl -X GET "http://localhost:3000/api/v1/locations/provincesByPostalCode/23700"
+```
+
+</CodeGroup>
+
+### Jaén response
+
+```json
+{
+  "_id": "6a33f09ea7b22b51721309bc",
+  "countryCode": "ES",
+  "countryName": "Spain",
+  "adminCode": "J",
+  "adminFullCode": "ES-J",
+  "name": "Jaén",
+  "normalizedName": "jaen",
+  "postalCode": "23",
+  "type": "province",
+  "createdAt": "2026-06-18T13:20:30.442Z",
+  "updatedAt": "2026-06-18T13:20:30.442Z"
+}
+```
+
+### Madrid response
+
+```json
+{
+  "_id": "6a33f09ea7b22b51721309d1",
+  "countryCode": "ES",
+  "countryName": "Spain",
+  "adminCode": "M",
+  "adminFullCode": "ES-M",
+  "name": "Madrid",
+  "normalizedName": "madrid",
+  "postalCode": "28",
+  "type": "province",
+  "createdAt": "2026-06-18T13:20:30.436Z",
+  "updatedAt": "2026-06-18T13:20:30.436Z"
+}
+```
+
+## Error Responses
+
+<CodeGroup>
+
+```json 400 Bad Request — Invalid postal code format
+{
+  "message": "Incorrect Postal Code"
+}
+```
+
+```json 404 Not Found — No province matched
+{
+  "message": "Province not found"
+}
+```
+
+</CodeGroup>
+
+<Warning>
+  The `postalCode` parameter must be **exactly 5 numeric digits**. Passing a
+  2-digit prefix (`28`) or a non-numeric string returns `400 Bad Request`. Always
+  pass the full 5-digit postal code even though only the first two digits are
+  used for the lookup.
+</Warning>
+
+<Info>
+  Internally, `getProvinceByPostalCode()` slices the first two characters from
+  the supplied code and performs an **O(1)** lookup against an in-memory `Map`
+  that is populated at server boot. No MongoDB query is issued at request time,
+  making this endpoint extremely fast even under high concurrency.
+</Info>
+
+<Tip>
+  After calling this endpoint you have the province's `adminFullCode` (e.g.
+  `ES-J`). You can pass that directly to `POST /rates/compareByProvinceCode`
+  along with the same postal code and your shipment items to get a full rate
+  comparison — no second lookup needed.
+</Tip>

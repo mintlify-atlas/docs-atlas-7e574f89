@@ -1,0 +1,171 @@
+---
+title: "Create Location — Ship Quote API Reference"
+sidebarTitle: "Create Location"
+description: "Register a new country or province entry in the Ship Quote geographic database. Returns the created location object with a 201 status on success."
+---
+
+The Create Location endpoint adds a new geographic entry — a province, state, or region — to the Ship Quote database. The `adminFullCode` is automatically derived from the `countryCode` and `adminCode` you supply (e.g. `ES` + `28` → `ES-28`), and a URL-safe `normalizedName` is generated from the `name` field. Province entries created here are subsequently resolvable via the [List Provinces](/api/locations/list-provinces) and [Province by Postal Code](/api/locations/province-by-postal-code) endpoints, and their `adminFullCode` values are used directly as the `province` parameter in `compareByProvinceCode`.
+
+## Endpoint
+
+```
+POST /api/v1/locations
+```
+
+## Request Body
+
+<ParamField body="countryCode" type="string" required>
+  Two-letter ISO-3166-1 alpha-2 country code in uppercase. Examples: `ES` for
+  Spain, `FR` for France, `IT` for Italy. Maximum 2 characters. The value is
+  stored uppercased.
+</ParamField>
+
+<ParamField body="countryName" type="string" required>
+  Full human-readable country name. Examples: `España`, `France`. Maximum 50
+  characters. The API normalises the value to Title Case on write (e.g.
+  `"españa"` → `"España"`).
+</ParamField>
+
+<ParamField body="adminCode" type="string" required>
+  Administrative region code for the province, state, or region. This can be a
+  numeric string (e.g. `"28"` for Madrid) or an alphabetic abbreviation (e.g.
+  `"VI"` for Álava, `"AB"` for Albacete). Stored in uppercase. Together with
+  `countryCode` this forms the `adminFullCode`.
+</ParamField>
+
+<ParamField body="adminFullCode" type="string">
+  Fully-qualified administrative code with the country prefix, such as `ES-28`
+  or `ES-VI`. When omitted, the API constructs this automatically by
+  concatenating `countryCode + "-" + adminCode`. The `adminFullCode` field has a
+  unique index — attempting to create a duplicate will return an error.
+</ParamField>
+
+<ParamField body="name" type="string" required>
+  Display name of the province or region. Examples: `Madrid`, `Álava`,
+  `Albacete`. Maximum 50 characters. A URL-safe lowercase `normalizedName` is
+  derived automatically (accents stripped, spaces replaced with underscores).
+</ParamField>
+
+<ParamField body="type" type="string">
+  Classification of the geographic entry. Accepted values: `province`, `state`,
+  `region`. Defaults to `province` when omitted.
+</ParamField>
+
+## Response
+
+A successful request returns `HTTP 201 Created` with the persisted location document in the response body.
+
+<ResponseField name="_id" type="string">
+  MongoDB ObjectId of the newly created location document.
+</ResponseField>
+
+<ResponseField name="countryCode" type="string">
+  Uppercased ISO-2 country code as stored (e.g. `ES`).
+</ResponseField>
+
+<ResponseField name="countryName" type="string">
+  Title-cased country name as stored (e.g. `España`).
+</ResponseField>
+
+<ResponseField name="adminCode" type="string">
+  Uppercased administrative region code (e.g. `28`, `VI`).
+</ResponseField>
+
+<ResponseField name="adminFullCode" type="string">
+  Fully-qualified code with country prefix (e.g. `ES-28`, `ES-VI`). This is
+  the value you pass as `province` to `POST /rates/compareByProvinceCode`.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Title-cased province name as stored (e.g. `Madrid`).
+</ResponseField>
+
+<ResponseField name="normalizedName" type="string">
+  Auto-generated lowercase, accent-stripped, underscore-separated name used
+  for internal indexing (e.g. `madrid`, `alava`).
+</ResponseField>
+
+<ResponseField name="postalCode" type="string">
+  Two-digit postal prefix associated with this province (e.g. `28` for
+  Madrid, `01` for Álava). This field is required by the model but is not
+  part of the create request body — seed data sets it during bootstrap.
+</ResponseField>
+
+<ResponseField name="type" type="string">
+  The stored entry type: `province`, `state`, or `region`.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 timestamp of when the document was created.
+</ResponseField>
+
+<ResponseField name="updatedAt" type="string">
+  ISO 8601 timestamp of the most recent update.
+</ResponseField>
+
+## Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST http://localhost:3000/api/v1/locations \
+  -H "Content-Type: application/json" \
+  -d '{
+    "countryCode": "ES",
+    "countryName": "España",
+    "adminCode": "28",
+    "adminFullCode": "ES-28",
+    "name": "Madrid",
+    "type": "province"
+  }'
+```
+
+```json 201 Created
+{
+  "_id": "6a33f09ea7b22b51721309d1",
+  "countryCode": "ES",
+  "countryName": "España",
+  "adminCode": "28",
+  "adminFullCode": "ES-28",
+  "name": "Madrid",
+  "normalizedName": "madrid",
+  "postalCode": "28",
+  "type": "province",
+  "createdAt": "2026-06-18T13:20:30.436Z",
+  "updatedAt": "2026-06-18T13:20:30.436Z"
+}
+```
+
+</CodeGroup>
+
+## Error Responses
+
+<CodeGroup>
+
+```json 400 Bad Request — Missing required field
+{
+  "message": "Nombre de provincia obligatorio."
+}
+```
+
+```json 400 Bad Request — Duplicate adminFullCode
+{
+  "message": "E11000 duplicate key error collection: locations index: adminFullCode_1 dup key: { adminFullCode: \"ES-28\" }"
+}
+```
+
+</CodeGroup>
+
+<Note>
+  The `adminFullCode` field carries a **unique index** in MongoDB. If you
+  attempt to create a second province with the same `adminFullCode` (e.g.
+  `ES-28`), the API returns a `400` with a duplicate key error. Use [List
+  Provinces](/api/locations/list-provinces) first to check whether a province
+  already exists.
+</Note>
+
+<Tip>
+  The Spanish province dataset is automatically seeded into the database on
+  first startup. You only need this endpoint to add provinces from other
+  countries or to extend the geographic coverage beyond the bundled seed data.
+</Tip>

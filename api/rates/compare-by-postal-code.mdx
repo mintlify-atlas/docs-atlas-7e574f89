@@ -1,0 +1,400 @@
+---
+title: "Shipping Rate Comparison by Destination Postal Code"
+sidebarTitle: "By Postal Code"
+description: "POST /api/v1/rates/compareByPostalCode — auto-resolves a destination postal code to a province and returns normalized rates from all active agencies."
+---
+
+This is the primary rate comparison endpoint. Submit a destination postal code, a country code, and a list of shipment items and Ship Quote will auto-resolve the postal code to its corresponding province, determine whether the shipment is national or international, fan out requests to every active agency that covers that scope in parallel, and return a normalized per-agency result array. Both static (database-backed) and API-integrated agencies are queried simultaneously, so you always receive the most complete picture in a single call.
+
+<Info>
+  The `DEFAULT_COUNTRY` environment variable controls which country code is treated as national. When the server is configured for Spain (`DEFAULT_COUNTRY=ES`), sending `countryCode: "ES"` triggers national agency matching; any other ISO-2 code triggers international agency matching.
+</Info>
+
+---
+
+## Endpoint
+
+```
+POST /api/v1/rates/compareByPostalCode
+```
+
+---
+
+## Middleware chain
+
+Requests pass through three middleware layers before reaching the controller:
+
+| Order | Middleware | What it checks |
+|-------|-----------|----------------|
+| 1 | `schemaValidation` | Request body must be present and non-empty |
+| 2 | `rateDestinationValidation` | `destinationPostalCode` and `countryCode` must be non-null strings; when the country matches `DEFAULT_COUNTRY`, postal code must match the 5-digit format (`\d{5}`) |
+| 3 | `rateItemsValidation` | `items` must be a non-empty array; each item must have a positive `weight`, positive `large`/`width`/`height`, and a valid `typeServices` value |
+
+---
+
+## Request body
+
+<ParamField path="destinationPostalCode" type="string" required>
+  The destination postal code. Must be a 5-digit string when shipping within the default country (e.g. `"18001"` for Granada, Spain). For international destinations the format constraint is relaxed.
+</ParamField>
+
+<ParamField path="countryCode" type="string" required>
+  ISO 3166-1 alpha-2 country code for the destination (e.g. `"ES"`, `"FR"`, `"DE"`). The value determines whether national or international agencies are queried.
+</ParamField>
+
+<ParamField path="items" type="array" required>
+  List of shipment items to price. Must contain at least one entry.
+
+  <Expandable title="Item object">
+    <ParamField path="typeServices" type="string" required>
+      Type of shipment. Accepted values: `"pallet"` or `"parcel"`.
+    </ParamField>
+
+    <ParamField path="weight" type="number" required>
+      Item weight in kilograms. Must be greater than `0`.
+    </ParamField>
+
+    <ParamField path="large" type="number" required>
+      Item length in centimetres. Must be greater than `0`. Required for all items (pallet and parcel).
+    </ParamField>
+
+    <ParamField path="width" type="number" required>
+      Item width in centimetres. Must be greater than `0`. Required for all items.
+    </ParamField>
+
+    <ParamField path="height" type="number" required>
+      Item height in centimetres. Must be greater than `0`. Required for all items.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+---
+
+## Response body
+
+The response is a flat JSON array. Each element represents one active agency and its computed services.
+
+<ResponseField name="[]" type="array">
+  Array of per-agency result objects.
+
+  <Expandable title="Agency result object">
+    <ResponseField name="agency" type="string">
+      Display name of the shipping agency (e.g. `"Cayco"`, `"Dachser"`).
+    </ResponseField>
+
+    <ResponseField name="available" type="boolean">
+      `true` when at least one priced service was found for this agency; `false` when no applicable rate exists (the agency is active but has no tariff covering this route or item type).
+    </ResponseField>
+
+    <ResponseField name="zone" type="string">
+      The agency-specific zone name resolved for the destination (e.g. `"ZONA 3"`, `"NACIONAL"`).
+    </ResponseField>
+
+    <ResponseField name="services" type="array">
+      List of service options offered by this agency for the shipment.
+
+      <Expandable title="Service object">
+        <ResponseField name="service" type="string">
+          Service level name as defined by the agency (e.g. `"economy"`, `"premium"`, `"targoflex (500380)"`). Set to `"Sin tarifa disponible"` when `available` is `false`.
+        </ResponseField>
+
+        <ResponseField name="total" type="number">
+          Total price for this service in EUR (all surcharges included). `0` when no rate is available.
+        </ResponseField>
+
+        <ResponseField name="itemCount" type="number">
+          Number of shipment items that were successfully priced under this service. `0` when no rate is available.
+        </ResponseField>
+
+        <ResponseField name="breakdown" type="array">
+          Itemized price components that sum to `total`.
+
+          <Expandable title="Breakdown entry">
+            <ResponseField name="type" type="string">
+              Component label (e.g. `"Tarifa base"`, `"fuel surcharge"`, `"Product surcharge"`).
+            </ResponseField>
+
+            <ResponseField name="price" type="number">
+              Cost of this component in EUR.
+            </ResponseField>
+
+            <ResponseField name="palletType" type="string">
+              Pallet category matched for this item (e.g. `"CUARTO"`, `"QUARTER PALLET"`). Present on static-agency base-rate entries.
+            </ResponseField>
+
+            <ResponseField name="quantity" type="number">
+              Number of units priced at this rate. Present on static-agency base-rate entries.
+            </ResponseField>
+
+            <ResponseField name="unitPrice" type="number">
+              Price per unit before multiplication by `quantity`. Present on static-agency base-rate entries.
+            </ResponseField>
+
+            <ResponseField name="items" type="array">
+              Echo of the input item(s) that generated this breakdown line. Present on static-agency base-rate entries.
+            </ResponseField>
+          </Expandable>
+        </ResponseField>
+
+        <ResponseField name="incidents" type="array">
+          Warnings or errors generated while computing this service. Empty array on success.
+
+          <Expandable title="Incident object">
+            <ResponseField name="type" type="string">
+              Short incident label (e.g. `"Sin tarifa disponible"`).
+            </ResponseField>
+
+            <ResponseField name="message" type="string">
+              Optional human-readable detail.
+            </ResponseField>
+          </Expandable>
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+## Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST http://localhost:3000/api/v1/rates/compareByPostalCode \
+  -H "Content-Type: application/json" \
+  -d '{
+    "destinationPostalCode": "18001",
+    "countryCode": "ES",
+    "items": [
+      {
+        "typeServices": "pallet",
+        "weight": 215,
+        "large": 80,
+        "width": 90,
+        "height": 80
+      }
+    ]
+  }'
+```
+
+```json Response 200 OK
+[
+    {
+        "agency": "Cayco",
+        "available": true,
+        "zone": "ZONA 3",
+        "services": [
+            {
+                "service": "economy",
+                "total": 41.43,
+                "itemCount": 1,
+                "breakdown": [
+                    {
+                        "type": "Tarifa base",
+                        "price": 41.43,
+                        "palletType": "CUARTO",
+                        "quantity": 1,
+                        "unitPrice": 41.43,
+                        "items": [
+                            {
+                                "typeServices": "pallet",
+                                "weight": 215,
+                                "large": 80,
+                                "width": 90,
+                                "height": 80
+                            }
+                        ]
+                    }
+                ],
+                "incidents": []
+            }
+        ]
+    },
+    {
+        "agency": "Tecum",
+        "available": true,
+        "zone": "ZONA 1",
+        "services": [
+            {
+                "service": "premium",
+                "total": 43.48,
+                "itemCount": 1,
+                "breakdown": [
+                    {
+                        "type": "Tarifa base",
+                        "price": 43.48,
+                        "palletType": "QUARTER PALLET",
+                        "quantity": 1,
+                        "unitPrice": 43.48,
+                        "items": [
+                            {
+                                "typeServices": "pallet",
+                                "weight": 215,
+                                "large": 80,
+                                "width": 90,
+                                "height": 80
+                            }
+                        ]
+                    }
+                ],
+                "incidents": []
+            },
+            {
+                "service": "economy",
+                "total": 43.5,
+                "itemCount": 1,
+                "breakdown": [
+                    {
+                        "type": "Tarifa base",
+                        "price": 43.5,
+                        "palletType": "QUARTER PALLET",
+                        "quantity": 1,
+                        "unitPrice": 43.5,
+                        "items": [
+                            {
+                                "typeServices": "pallet",
+                                "weight": 215,
+                                "large": 80,
+                                "width": 90,
+                                "height": 80
+                            }
+                        ]
+                    }
+                ],
+                "incidents": []
+            }
+        ]
+    },
+    {
+        "agency": "Correosexpress",
+        "available": false,
+        "zone": "NACIONAL",
+        "services": [
+            {
+                "service": "Sin tarifa disponible",
+                "total": 0,
+                "itemCount": 0,
+                "breakdown": [],
+                "incidents": [
+                    {
+                        "type": "Sin tarifa disponible",
+                        "message": ""
+                    }
+                ]
+            }
+        ]
+    },
+    {
+        "agency": "Mrw",
+        "available": false,
+        "zone": "NACIONAL",
+        "services": [
+            {
+                "service": "Sin tarifa disponible",
+                "total": 0,
+                "itemCount": 0,
+                "breakdown": [],
+                "incidents": [
+                    {
+                        "type": "Sin tarifa disponible",
+                        "message": ""
+                    }
+                ]
+            }
+        ]
+    },
+    {
+        "agency": "Dachser",
+        "available": true,
+        "zone": "NACIONAL",
+        "services": [
+            {
+                "service": "targoflex (500380)",
+                "total": 51.27,
+                "itemCount": 1,
+                "breakdown": [
+                    {
+                        "type": "freight ex works to place of destination",
+                        "price": 45.1
+                    },
+                    {
+                        "type": "fuel surcharge",
+                        "price": 6.17
+                    }
+                ],
+                "incidents": []
+            },
+            {
+                "service": "targospeed (500379)",
+                "total": 56.27,
+                "itemCount": 1,
+                "breakdown": [
+                    {
+                        "type": "freight ex works to place of destination",
+                        "price": 45.1
+                    },
+                    {
+                        "type": "fuel surcharge",
+                        "price": 6.17
+                    },
+                    {
+                        "type": "Product surcharge",
+                        "price": 5
+                    }
+                ],
+                "incidents": []
+            },
+            {
+                "service": "targospeed 12 (500381)",
+                "total": 66.27,
+                "itemCount": 1,
+                "breakdown": [
+                    {
+                        "type": "freight ex works to place of destination",
+                        "price": 45.1
+                    },
+                    {
+                        "type": "fuel surcharge",
+                        "price": 6.17
+                    },
+                    {
+                        "type": "Product surcharge",
+                        "price": 15
+                    }
+                ],
+                "incidents": []
+            }
+        ]
+    }
+]
+```
+
+</CodeGroup>
+
+---
+
+## HTTP status codes
+
+| Code | Meaning |
+|------|---------|
+| `200 OK` | Rate comparison completed. The array always contains one entry per active agency in scope, even when `available` is `false`. |
+| `400 Bad Request` | Validation failed. The response body contains a `message` field describing which field failed (e.g. `"Postal Code invalid"`, `"items cannot be empty"`, `"Item 1: weight must be a number > 0"`). |
+| `404 Not Found` | The postal code could not be resolved to a known province for the default country, or no rate comparison result was produced. |
+| `500 Internal Server Error` | An unhandled server-side error occurred. |
+
+<Warning>
+  A `200` response does **not** guarantee all agencies returned a price. Always check `available` on each result entry and inspect `incidents` for service-level warnings before presenting rates to end users.
+</Warning>
+
+---
+
+## How scope detection works
+
+The controller calls `getProvinceByPostalCode(destinationPostalCode)` to resolve the province from an in-memory map loaded at server startup. If the country code matches `DEFAULT_COUNTRY` (default: `ES`) and no province is found, a `404` is returned immediately. For international shipments the province defaults to an empty string and international-scoped agencies are queried instead.
+
+The `rates` service then calls `getScope(countryCode)`, which returns `"national"` when `countryCode === DEFAULT_COUNTRY` and `"international"` otherwise. Only agencies whose `rules.coverage` array includes the detected scope are included in the comparison.
+
+<Tip>
+  If you already know the province code (e.g. from a prior call to `GET /api/v1/locations/provinces`), use [`compareByProvinceCode`](/api/rates/compare-by-province-code) to skip the postal-code resolution step entirely and reduce latency.
+</Tip>

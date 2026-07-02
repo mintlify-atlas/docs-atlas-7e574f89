@@ -1,0 +1,356 @@
+---
+title: "Ship Quote Rate Engine: Pipeline and Calculators"
+sidebarTitle: "Rate Engine"
+description: "Deep dive into Ship Quote's rate engine: scope detection, parallel provider execution, pallet and parcel calculators, surcharges, and carrier adapters."
+---
+
+The rate engine is the core of Ship Quote. It takes a single POST request carrying shipment details and returns a ranked list of quotes from every active agency in the system — static carriers whose tariffs live in MongoDB and live API carriers queried in real time. This page walks through each processing stage in order, then covers the internal mechanics of the calculators and carrier adapter pattern.
+
+## Processing Pipeline
+
+<Steps>
+  <Step title="Input — User Sends Shipment Data">
+    A client posts shipment data to `POST /api/v1/rates/compareByPostalCode` or `POST /api/v1/rates/compareByProvinceCode`. The request body must include a destination postal code, an ISO-2 country code, and a non-empty `items` array.
+
+    ```json
+    {
+      "destinationPostalCode": "28001",
+      "countryCode": "ES",
+      "items": [
+        {
+          "typeServices": "pallet",
+          "weight": 250,
+          "large": 120,
+          "width": 80,
+          "height": 150
+        }
+      ]
+    }
+    ```
+  </Step>
+
+  <Step title="Validation — Middleware Guards the Request">
+    Before the controller is invoked, the request passes through two chained middleware functions.
+
+    **`rateDestinationValidation`** checks that `destinationPostalCode` and `countryCode` are present strings. For Spanish shipments (when `countryCode === DEFAULT_COUNTRY`), it also enforces that the postal code matches the 5-digit format `/^\d{5}$/`.
+
+    **`rateItemsValidation`** ensures `items` is a non-empty array and that every element carries a valid `typeServices`, a positive `weight`, and positive `large`, `width`, and `height` values. Any failure throws an HTTP 400 immediately.
+
+    ```javascript
+    // api/src/api/middlewares/rate.validation.middleware.js
+    export const rateDestinationValidation = (req, res, next) => {
+        const { destinationPostalCode, countryCode } = req.body;
+
+        if (!/^\d{5}$/.test(destinationPostalCode)
+            && countryCode === process.env?.DEFAULT_COUNTRY
+        ) {
+            throw createHttpError(400, 'Postal Code invalid');
+        }
+
+        next();
+    };
+    ```
+  </Step>
+
+  <Step title="Scope Detection — National vs. International">
+    The engine determines the shipment scope by comparing `countryCode` against the `DEFAULT_COUNTRY` environment variable (typically `ES`).
+
+    ```javascript
+    // api/src/lib/constants/scopes.zone.js
+    export const SCOPE_TYPES = {
+        NATIONAL:      'national',
+        INTERNATIONAL: 'international'
+    };
+
+    export function getScope(countryCode) {
+        return countryCode === process.env.DEFAULT_COUNTRY
+            ? SCOPE_TYPES.NATIONAL
+            : SCOPE_TYPES.INTERNATIONAL;
+    }
+    ```
+
+    | `countryCode` | Resolved Scope | Display Label |
+    |---|---|---|
+    | `ES` (matches `DEFAULT_COUNTRY`) | `national` | `NACIONAL` |
+    | Any other code | `international` | `INTERNACIONAL` |
+
+    The scope is used in the next step to filter agencies and later to label the zone on API-provider results.
+  </Step>
+
+  <Step title="Agency Filtering — Match Coverage Rules">
+    With the scope resolved, `rates.service.js` queries MongoDB for all active agencies whose `rules.coverage` array includes the current scope. The result set is then split into two buckets by `agency.type`.
+
+    ```javascript
+    // api/src/api/services/rates.service.js
+    const agencies = await Agency.find({
+        active: { $ne: false },
+        'rules.coverage': scope           // 'national' or 'international'
+    });
+
+    const staticAgencies = agencies.filter(a =>
+        a.type === AGENCY_TYPE.STATIC || a.type === AGENCY_TYPE.HYBRID
+    );
+
+    const apiAgencies = agencies.filter(a =>
+        a.type === AGENCY_TYPE.API
+    );
+    ```
+
+    Agencies with `active: false` are excluded entirely; they remain in the database but receive no traffic until re-activated.
+  </Step>
+
+  <Step title="Parallelization — Static and API Providers Run Concurrently">
+    Both provider calls are launched simultaneously with `Promise.all`. Neither blocks the other — a slow external carrier API cannot delay a fast static lookup.
+
+    ```javascript
+    const [staticResults, apiResults] = await Promise.all([
+        getStaticRates(staticAgencies, input),
+        getApiRates(apiAgencies, input)
+    ]);
+
+    return [...staticResults, ...apiResults];
+    ```
+
+    If an individual API carrier throws or times out, the error is caught inside the provider and converted to a structured error result — the other agencies are not affected.
+  </Step>
+
+  <Step title="Processing — Calculation per Provider Type">
+    **Static provider** (`static.rate.provider.js`): For each static agency, the provider reads data from the in-memory tariff store, resolves the destination zone, and delegates to either `calculatePallet` or `calculateParcel` based on `zone.calculationMode`.
+
+    **API provider** (`api.rate.provider.js`): For each API agency, the provider instantiates the correct carrier class via `carrierFactory(agency)`, calls `carrier.getRates(input)`, and passes the raw response through `buildRateComplete` to normalize the shape.
+
+    Both paths produce the same intermediate structure: an array of `buildRateResult` objects carrying `service`, `transportType`, `concepts`, `incidents`, and a pre-computed `total`.
+  </Step>
+
+  <Step title="Normalization and Response">
+    All raw results flow through `presentRate()` in `rate.presenter.js`. This function translates internal concept codes (`BASE`, `FUEL_SURCHARGE`, etc.) into human-readable labels using a labels map and shapes each entry into the public response format.
+
+    ```javascript
+    // api/src/api/services/rates/presenters/rate.presenter.js
+    export function presentRate(results) {
+        return results.map(result => ({
+            service:   getConceptLabel(result.service),
+            total:     result.total,
+            itemCount: result.itemCount,
+            breakdown: result.concepts.map(concept => ({
+                type:  getConceptLabel(concept.code),
+                price: concept?.amount,
+                ...concept?.meta
+            })),
+            incidents: result.incidents.map(incident => ({
+                type: getConceptLabel(incident.code),
+                ...incident?.meta
+            }))
+        }));
+    }
+    ```
+
+    The final response is a flat array of per-agency objects, each containing `agency`, `available`, `zone`, and `services`.
+  </Step>
+</Steps>
+
+## Scope System
+
+The `SCOPE_TYPES` constant is the single source of truth for shipment scope values across the entire codebase.
+
+```javascript
+// api/src/lib/constants/scopes.zone.js
+export const SCOPE_TYPES = {
+    NATIONAL:      'national',
+    INTERNATIONAL: 'international'
+};
+
+export const SCOPE_LABELS = {
+    [SCOPE_TYPES.NATIONAL]:      'NACIONAL',
+    [SCOPE_TYPES.INTERNATIONAL]: 'INTERNACIONAL'
+};
+```
+
+`SCOPE_LABELS` is used by the API provider to populate the `zone` field on the response object when there is no database zone name available (external carriers are not zone-mapped internally).
+
+## Pallet Rate Calculator
+
+Static pallet calculation starts in `pallet.rate.calculator.js`. The function reads the zone's `pricingMode.type` and delegates to one of two strategies.
+
+```javascript
+// api/src/api/services/rates/providers/static/pallet.rate.calculator.js
+export function calculatePallet(params) {
+    const { nameAgency, zone } = params;
+
+    const calculators = {
+        [PRICING_MODES.WEIGHT]:        () => calculateSinglePallet(params),
+        [PRICING_MODES.WEIGHT_VOLUME]: () => calculateWeightVolume(params)
+    };
+
+    const calculator = calculators[zone.pricingMode.type];
+    // throws if pricingMode is unrecognised
+    return calculator();
+}
+```
+
+### `weight` Pricing Mode — Per Pallet Type
+
+The `calculateSinglePallet` strategy groups inbound pallet items by matching each one to the smallest `PalletType` in the agency's `sortedPalletTypes` list whose `maxWeight`, `maxHeight`, `maxLength`, and `maxWidth` all satisfy the item's dimensions. Rejected items (no matching pallet type) are returned as incident records, not dropped silently.
+
+For each group the engine looks up the rate document using the composite cache key `"pallet|{zoneName}|{palletTypeId}"`, finds the matching `priceBreak` bracket for the group quantity, applies the fuel surcharge, and emits a `buildConcept('BASE', total, { palletType, quantity, unitPrice, items })` record.
+
+### `weight_volume` Pricing Mode — Total Weight Across All Items
+
+The `calculateWeightVolume` strategy sums effective weights across all pallet items (optionally applying volumetric conversion if `zone.volumetric.enabled` is true), then looks up the rate using the key `"pallet|{zoneName}|none"` and matches the total weight against the `priceBreaks` array.
+
+### Tonnage Pricing Rule
+
+Some zones include a tonnage pricing rule that switches the unit from €/kg to €/ton when total weight exceeds a configured threshold.
+
+```javascript
+export function calculateTonnagePricing(tonnagePricingRule, priceBase, totalWeight) {
+    if (!tonnagePricingRule?.enabled) return { price: round(priceBase), unit: '€/kg' };
+
+    const { threshold, unit } = tonnagePricingRule;
+
+    if (totalWeight < threshold) return { price: round(priceBase), unit: '€/kg' };
+
+    return {
+        price: round((totalWeight / 1000) * priceBase),
+        unit   // e.g. "€/ton"
+    };
+}
+```
+
+### Fuel Surcharge
+
+Both pricing modes apply the agency-level fuel surcharge configured in `agency.supplements.fuelSurcharge`. Depending on `type`, it adds either a percentage or a fixed amount on top of the base price before the tonnage rule is evaluated.
+
+## Parcel Rate Calculator
+
+Parcel calculation uses a different flow because parcel items are not grouped by type — all items in the request are treated as a single shipment whose total weight determines the price.
+
+<Steps>
+  <Step title="Item Validation">
+    Each parcel item is checked against the service's `limits` (maxWeight, maxLength, maxSumDimensions). Items that exceed a limit generate an incident record and are excluded from the pricing calculation.
+  </Step>
+  <Step title="Weight Resolution">
+    Valid items are enriched with their volumetric weight (`length × width × height / volumetricFactor`). The total weight used for pricing is determined by `zone.pricingMode.type`:
+
+    - `weight` → use the sum of real weights.
+    - `weight_volume` → use `max(realWeight, volumetricWeight)`.
+
+    The result is rounded up with `Math.ceil` to the next whole kilogram.
+  </Step>
+  <Step title="Surcharge Calculation">
+    Three surcharge types are evaluated per service:
+
+    | Surcharge | Trigger | Field |
+    |---|---|---|
+    | `extraKg` | Item weight exceeds a per-item threshold | `surcharges.extraKg.pricePerKg` |
+    | `dimensionRanges` | Item longest-side falls within a bracket | `surcharges.dimensionRanges[]` |
+    | `multiParcelExcess` | Total weight exceeds `thresholdKg`; extra cost accrues in blocks of `divisor` kg | `surcharges.multiParcelExcess` |
+  </Step>
+  <Step title="Price Resolution">
+    `resolveParcelPrice` matches `totalWeight` (after surcharges) against the service's `priceBreaks` array and adds any outstanding extra-dimension costs plus the agency fuel surcharge.
+  </Step>
+</Steps>
+
+## Carrier Adapter Pattern (API Provider)
+
+All external carrier integrations follow the same abstract base class pattern defined in `carriers.service.interface.js`.
+
+```javascript
+// Simplified abstract base class
+export default class CarrierService {
+    constructor(agency) {
+        this.agency    = agency;
+        this.apiConfig = agency.apiConfig;
+    }
+
+    // Subclasses must implement:
+    buildRequestBody(input)     { throw new Error('not implemented'); }
+    buildRequestHeaders(apiKey) { throw new Error('not implemented'); }
+    mapResponse(data)           { throw new Error('not implemented'); }
+
+    async getRates(input) {
+        const { baseUrlApi, endpoints, apiKey, timeout } = this.apiConfig;
+        const response = await this.fetchApi(
+            `${baseUrlApi}/${endpoints.quotations.trim()}`,
+            this.buildRequestHeaders(apiKey),
+            this.buildRequestBody(input),
+            timeout
+        );
+        return this.mapResponse(response);
+    }
+}
+```
+
+The `fetchApi` helper wraps the native `fetch` API with an `AbortController` timeout. A non-2xx response throws an HTTP error with the carrier's error message; a network timeout throws HTTP 408.
+
+New carriers are registered in `carriers.map.js` by adding a mapping from `agency.code` to the concrete class:
+
+```javascript
+// api/src/api/services/rates/providers/api/carriers/carriers.map.js
+import DascherService from './externalCarriers/dascher.service.js';
+
+export const carrierMap = {
+    dachser: DascherService
+};
+```
+
+`carrierFactory(agency)` looks up `agency.code` in this map and returns a new instance, or `null` if no adapter has been registered yet — in which case the API provider returns a structured `"Carrier not implemented"` error result instead of throwing.
+
+### Dachser Adapter
+
+The Dachser adapter (`dascher.service.js`) demonstrates how a concrete carrier implementation works. It overrides `getRates` to fan out requests across multiple transport products (e.g., `targoflex`, `targospeed`, `targospeed 12`) concurrently using `Promise.allSettled` — so a failure on one product does not cancel the others.
+
+```javascript
+// api/src/api/services/rates/.../externalCarriers/dascher.service.js (excerpt)
+async getRates(input) {
+    const responses = await Promise.allSettled(
+        transportProducts.map(async product => ({
+            response: await this.fetchApi(
+                `${baseUrlApi}/${quotations.trim()}`,
+                this.buildRequestHeaders(apiKey),
+                this.buildRequestBody(input, items, product.code),
+                timeout
+            ),
+            product
+        }))
+    );
+
+    const validResponses = responses
+        .filter(r => r.status === 'fulfilled')
+        .map(r => r.value);
+
+    return validResponses.flatMap(response =>
+        this.mapResponse(response, items)
+    );
+}
+```
+
+`mapResponse` converts the carrier's raw JSON into `buildRateResult` objects using `buildConcept` for each line item in `quotationDetails` (freight base, fuel surcharge, product surcharge, etc.).
+
+## Error Handling and Incidents
+
+Neither provider throws unhandled errors to the caller. All failures — zone not found, unsupported calculation mode, carrier timeout, API 4xx/5xx — are converted to a structured result using `buildStaticErrorResult` or `buildApiErrorResult`.
+
+```javascript
+export function buildStaticErrorResult({ presentRate, agency, code, message = '' }) {
+    return buildRateComplete({
+        agency,
+        services: presentRate([
+            buildRateResult({
+                service: code,
+                incidents: [ buildIncident(code, { message }) ]
+            })
+        ])
+    });
+}
+```
+
+The `available` flag on the top-level agency result object is derived automatically: it is `true` only when at least one service in the `services` array has an empty `incidents` array.
+
+<Tip>
+  To add a new static agency, seed its Agency document, Zone documents, PalletType documents, and Rate documents, then restart the API so `loadAgencyTariffs()` loads the new data into the cache. No code changes are required.
+</Tip>
+
+<Warning>
+  The `AGENCY_TYPE.HYBRID` value is reserved for agencies that have both static DB rates and a live API. Hybrid agencies are currently passed to the **static provider only**. Extend `rates.service.js` to include them in `apiAgencies` as well when implementing hybrid queries.
+</Warning>

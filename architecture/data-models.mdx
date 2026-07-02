@@ -1,0 +1,398 @@
+---
+title: "Ship Quote MongoDB Collections: Full Schema Reference"
+sidebarTitle: "Data Models"
+description: "Complete MongoDB schemas for all five Ship Quote collections: Agency, Location, PalletType, Zone, and Rate, with indexes and inter-model relationships."
+---
+
+Ship Quote stores its configuration in five MongoDB collections managed through Mongoose. Understanding how these models relate to each other is essential for seeding data correctly and for extending the system with new carriers. This page documents every field in every schema, the indexes that back the rate engine's queries, and the relationships that tie the models together.
+
+## Model Relationships
+
+The diagram below shows how the five collections are connected.
+
+```
+Agency (1) ──────────────────────── Zone (N)
+  │                                   │
+  │                                   └─── ZoneRules (N)  [postal-code overrides]
+  │
+  ├──── PalletType (N)
+  │
+  └──── Rate (N) ──── palletTypeId ──► PalletType (optional)
+                  └── zoneName  (string FK to Zone.name)
+```
+
+- An **Agency** owns one or more **Zones**, **PalletTypes**, and **Rates**.
+- A **Zone** has zero or more **ZoneRules** that refine province-level zone assignment by postal code range.
+- A **Rate** references its zone by the `zoneName` string (not an ObjectId) to allow fast composite-key cache lookups without joins.
+- A **Rate** optionally references a **PalletType** via `palletTypeId` — present for per-pallet-type pricing, absent (`null`) for weight-volume or parcel pricing where the zone-level key is sufficient.
+
+---
+
+## Agency
+
+The `Agency` model (`api/src/lib/models/agency.model.js`) is the root entity for every carrier registered in the system. It controls whether the carrier is active, which shipment types it supports, what scope it covers, and — for API carriers — how to connect to the external endpoint.
+
+```json
+{
+  "_id":    "ObjectId",
+  "name":   "Dachser",
+  "code":   "dachser",
+  "type":   "api",
+  "active": true,
+
+  "rules": {
+    "hasAndaluciaRule": false,
+    "supportsPallets":  true,
+    "supportsParcels":  false,
+    "coverage":        ["national", "international"]
+  },
+
+  "supplements": {
+    "fuelSurcharge": {
+      "enabled": true,
+      "type":    "percentage",
+      "value":   5.5
+    }
+  },
+
+  "apiConfig": {
+    "baseUrlApi": "https://api.dachser.com",
+    "timeout":    5000,
+    "apiKey":     "sk_live_xxxxx",
+    "endpoints": {
+      "quotations":      "/v2/quotations",
+      "transportOrders": "/v2/orders"
+    }
+  },
+
+  "createdAt": "2026-06-18T10:30:00Z",
+  "updatedAt": "2026-06-18T10:30:00Z"
+}
+```
+
+### Field Reference
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `name` | String | required | 3–14 characters. Auto-title-cased on save. |
+| `code` | String | auto | Derived from `name` (lowercased, accents stripped, spaces → `_`). Unique index. |
+| `type` | String enum | `"static"` | `"static"` \| `"api"` \| `"hybrid"` |
+| `active` | Boolean | `true` | Set to `false` to disable without deleting. |
+| `rules.hasAndaluciaRule` | Boolean | `false` | Whether the agency applies special Andalucía routing rules. |
+| `rules.supportsPallets` | Boolean | `true` | Pallet items are processed for this agency. |
+| `rules.supportsParcels` | Boolean | `false` | Parcel items are processed for this agency. |
+| `rules.coverage` | `[String]` | `["national"]` | Accepted values: `"national"`, `"international"`. |
+| `supplements.fuelSurcharge.enabled` | Boolean | `false` | Toggle fuel surcharge on/off. |
+| `supplements.fuelSurcharge.type` | String enum | `"percentage"` | `"percentage"` or `"fixed"`. |
+| `supplements.fuelSurcharge.value` | Number | `0` | Percentage (e.g. `5.5`) or fixed euro amount (e.g. `2.50`). |
+| `apiConfig.baseUrlApi` | String | — | Required when `type` is `"api"`. |
+| `apiConfig.timeout` | Number | `3000` | HTTP timeout in milliseconds for external carrier calls. |
+| `apiConfig.apiKey` | String | — | Required when `type` is `"api"`. Passed via `X-API-Key` header. |
+| `apiConfig.endpoints.quotations` | String | — | Path appended to `baseUrlApi` for rate queries. |
+| `apiConfig.endpoints.transportOrders` | String | — | Path for order creation (future use). |
+
+<Note>
+  `apiConfig.baseUrlApi` and `apiConfig.apiKey` have conditional `required` validators — they are only enforced when `type === "api"`. Static agencies can omit the `apiConfig` block entirely.
+</Note>
+
+### Indexes
+
+```javascript
+agencySchema.index({ code: 1 }, { unique: true });
+```
+
+---
+
+## Location
+
+The `Location` model (`api/src/lib/models/location.model.js`) stores the geographical reference data: every province (and optionally country) that the system can route shipments to.
+
+```json
+{
+  "_id":            "ObjectId",
+  "countryCode":    "ES",
+  "countryName":    "Spain",
+  "adminCode":      "J",
+  "adminFullCode":  "ES-J",
+  "name":           "Jaén",
+  "normalizedName": "jaen",
+  "postalCode":     "23",
+  "type":           "province",
+  "createdAt":      "2026-06-18T13:20:30Z",
+  "updatedAt":      "2026-06-18T13:20:30Z"
+}
+```
+
+### Field Reference
+
+| Field | Type | Notes |
+|---|---|---|
+| `countryCode` | String | ISO 3166-1 alpha-2, uppercase (max 2 chars). |
+| `countryName` | String | Human-readable country name (max 50 chars). Title-cased on save. |
+| `adminCode` | String | Short province/region code, e.g. `"J"` for Jaén or `"28"` for Madrid. Uppercase. |
+| `adminFullCode` | String | Fully qualified code `"<countryCode>-<adminCode>"`, e.g. `"ES-J"`. Unique index. |
+| `name` | String | Province display name (max 50 chars). Title-cased on save. |
+| `normalizedName` | String | Accent-stripped, lowercased, spaces → `_` version of `name`. Used for search. |
+| `postalCode` | String | Two-digit postal code prefix (e.g. `"23"` for all 23xxx codes in Jaén). |
+| `type` | String enum | `"province"` \| `"state"` \| `"region"`. Default `"province"`. |
+
+### Indexes
+
+```javascript
+locationSchema.index({ countryCode: 1, normalizedName: 1 });
+locationSchema.index({ adminFullCode: 1 }, { unique: true });
+locationSchema.index({ normalizedName: 1 });   // single-field, defined on the path
+```
+
+The `adminFullCode` unique index prevents duplicate province records. The composite `{ countryCode, normalizedName }` index accelerates province look-ups by name when filtering by country.
+
+---
+
+## PalletType
+
+The `PalletType` model (`api/src/lib/models/palletType.model.js`) defines the pallet dimensions and weight limits recognised by a specific agency. The rate engine matches each inbound pallet item against the agency's sorted pallet types to determine which rate bracket applies.
+
+```json
+{
+  "_id":      "ObjectId",
+  "agencyId": "ObjectId → Agency",
+  "name":     "Euro Pallet",
+  "constraints": {
+    "maxWeight": 1000,
+    "maxHeight": 1600,
+    "maxLength": 1200,
+    "maxWidth":  800
+  },
+  "createdAt": "2026-06-18T10:00:00Z",
+  "updatedAt": "2026-06-18T10:00:00Z"
+}
+```
+
+### Field Reference
+
+| Field | Type | Notes |
+|---|---|---|
+| `agencyId` | ObjectId | Reference to the owning `Agency`. Indexed. |
+| `name` | String | Pallet type label, e.g. `"CUARTO"`, `"QUARTER PALLET"`, `"Euro Pallet"` (max 60 chars). |
+| `constraints.maxWeight` | Number | Maximum gross weight in kg. Required, ≥ 0. |
+| `constraints.maxHeight` | Number | Maximum stacked height in cm. Defaults to `0` (unconstrained). |
+| `constraints.maxLength` | Number | Maximum length in cm. Defaults to `0` (unconstrained). |
+| `constraints.maxWidth` | Number | Maximum width in cm. Defaults to `0` (unconstrained). |
+
+<Note>
+  Constraint values of `0` mean the dimension is not checked during pallet matching. Empty strings and `null` are coerced to `0` by the `sanitizeInput` setter.
+</Note>
+
+At startup, `loadAgencyTariffs()` sorts each agency's pallet types by `maxWeight` ascending, then `maxHeight` ascending, so the matching algorithm picks the smallest valid type — ensuring customers are priced accurately rather than being over-charged.
+
+---
+
+## Zone
+
+The `Zone` model (`api/src/lib/models/zone.model.js`) maps a set of provinces to a named pricing zone for a given agency. The rate engine resolves which zone applies to a destination by searching the province list (or, via `ZoneRules`, by postal code range).
+
+```json
+{
+  "_id":             "ObjectId",
+  "agencyId":        "ObjectId → Agency",
+  "name":            "ZONA 3",
+  "provinces":       ["ES-B", "ES-GI", "ES-L", "ES-T"],
+  "calculationMode": "pallet",
+  "volumetric": {
+    "enabled": false,
+    "factor":  200
+  },
+  "pricingMode": {
+    "type": "weight",
+    "tonnagePricingRule": {
+      "enabled":   false,
+      "threshold": 2001,
+      "unit":      "€/ton"
+    }
+  },
+  "createdAt": "2026-06-18T10:00:00Z",
+  "updatedAt": "2026-06-18T10:00:00Z"
+}
+```
+
+### Field Reference
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `agencyId` | ObjectId | required | Owning agency. |
+| `name` | String | required | Zone label, e.g. `"ZONA 1"`, `"NACIONAL"`, `"BALEARIC"`. |
+| `provinces` | `[String]` | `[]` | Array of `adminFullCode` values, e.g. `["ES-B", "ES-GI"]`. |
+| `calculationMode` | String enum | `"pallet"` | `"pallet"` or `"parcel"`. Determines which calculator is invoked. |
+| `volumetric.enabled` | Boolean | `false` | Whether to apply volumetric weight conversion to pallet items. |
+| `volumetric.factor` | Number | `200` | Divisor for volumetric weight: `(L × W × H) / factor`. |
+| `pricingMode.type` | String enum | `"weight"` | `"weight"` (per pallet type) or `"weight_volume"` (total weight across all items). |
+| `pricingMode.tonnagePricingRule.enabled` | Boolean | `false` | Switch price unit to €/ton above threshold. |
+| `pricingMode.tonnagePricingRule.threshold` | Number | `2001` | Weight threshold in kg above which tonnage pricing activates. |
+| `pricingMode.tonnagePricingRule.unit` | String | `"€/ton"` | Label shown in the rate breakdown. |
+
+### Indexes
+
+```javascript
+zoneSchema.index({ agencyId: 1 });
+zoneSchema.index({ agencyId: 1, provinces: 1 });
+```
+
+The multi-key index on `{ agencyId: 1, provinces: 1 }` allows MongoDB to efficiently find the zone for a given agency + province combination.
+
+---
+
+## ZoneRules
+
+The `ZoneRules` model (`api/src/lib/models/zone.rules.model.js`) provides postal-code-level overrides for province-level zone assignment. Some agencies route a specific postal code range within a province to a different zone from the rest of that province — `ZoneRules` captures those exceptions.
+
+```json
+{
+  "_id":      "ObjectId",
+  "agencyId": "ObjectId → Agency",
+  "zoneId":   "ObjectId → Zone",
+  "province": "ES-GR",
+  "isDefault": true,
+  "postalCodeRanges": [
+    { "from": "18001", "to": "18099" },
+    { "from": "18100", "to": "18199" }
+  ],
+  "createdAt": "2026-06-18T10:00:00Z",
+  "updatedAt": "2026-06-18T10:00:00Z"
+}
+```
+
+### Field Reference
+
+| Field | Type | Notes |
+|---|---|---|
+| `agencyId` | ObjectId | Owning agency. |
+| `zoneId` | ObjectId | The zone this rule maps to. |
+| `province` | String | The `adminFullCode` of the province this rule applies within, e.g. `"ES-GR"`. |
+| `isDefault` | Boolean | Exactly one rule per `(agencyId, province)` pair can be `isDefault: true`. It is the fallback when no postal code range matches. |
+| `postalCodeRanges` | Array | Each element has `from` and `to` (5-digit strings). The cache service pre-expands these ranges into individual postal code entries for O(1) look-ups. |
+
+### Indexes
+
+```javascript
+zoneRulesSchema.index({ agencyId: 1, province: 1 });
+zoneRulesSchema.index({ agencyId: 1, zoneId: 1 });
+// Partial unique index: only one default rule per (agencyId, province)
+zoneRulesSchema.index(
+    { agencyId: 1, province: 1, isDefault: 1 },
+    { unique: true, partialFilterExpression: { isDefault: true } }
+);
+```
+
+---
+
+## Rate
+
+The `Rate` model (`api/src/lib/models/rate.model.js`) stores the pricing tariff for a specific combination of agency, shipment type, zone, and (optionally) pallet type. Each rate document contains an array of `services` (e.g. `economy`, `premium`) each with its own `priceBreaks`, `surcharges`, and `limits`.
+
+```json
+{
+  "_id":           "ObjectId",
+  "agencyId":      "ObjectId → Agency",
+  "type":          "pallet",
+  "zoneName":      "ZONA 1",
+  "palletTypeId":  "ObjectId → PalletType",
+  "calculationType": "unit",
+  "services": [
+    {
+      "service": "economy",
+      "priceBreaks": [
+        { "min": 1,  "max": 1,  "price": 43.50 },
+        { "min": 2,  "max": 3,  "price": 38.00 },
+        { "min": 4,  "max": 10, "price": 33.00 }
+      ],
+      "surcharges": {
+        "extraKg": {
+          "enabled":    false,
+          "pricePerKg": 0
+        },
+        "dimensionRanges": [
+          { "min": 160, "max": 200, "price": 8.50 }
+        ],
+        "multiParcelExcess": {
+          "enabled":       false,
+          "thresholdKg":   40,
+          "divisor":       1,
+          "pricePerBlock": 0
+        }
+      },
+      "limits": {
+        "maxWeight":        500,
+        "maxLength":        0,
+        "maxSumDimensions": 0
+      }
+    }
+  ],
+  "createdAt": "2026-06-18T10:00:00Z",
+  "updatedAt": "2026-06-18T10:00:00Z"
+}
+```
+
+### Top-Level Fields
+
+| Field | Type | Notes |
+|---|---|---|
+| `agencyId` | ObjectId | Owning agency. Indexed. |
+| `type` | String enum | `"pallet"` or `"parcel"`. Part of the cache composite key. |
+| `zoneName` | String | Must match `Zone.name` exactly. Part of the cache composite key. |
+| `palletTypeId` | ObjectId / null | Present for per-pallet-type rates; `null` for weight-volume or parcel rates. Part of the cache composite key (stored as `"none"` when null). |
+| `calculationType` | String enum | `"unit"` (price per item/pallet) or `"quantity"` (price per quantity bracket). Default `"unit"`. |
+
+### Service Fields
+
+| Field | Type | Notes |
+|---|---|---|
+| `service` | String enum | `"economy"` \| `"premium"` \| `"express"` \| `"basic"`. |
+| `priceBreaks` | Array | Each element `{ min, max, price }` — the engine picks the bracket whose `min ≤ quantity ≤ max`. |
+| `surcharges.extraKg.enabled` | Boolean | Add `pricePerKg` for each kg over the base weight. |
+| `surcharges.dimensionRanges` | Array | `{ min, max, price }` — adds a flat fee if the item's longest dimension falls in the range. |
+| `surcharges.multiParcelExcess.thresholdKg` | Number | Total weight above which the excess charge activates (default `40` kg). |
+| `surcharges.multiParcelExcess.divisor` | Number | Excess weight is divided by this value to count billable blocks. |
+| `surcharges.multiParcelExcess.pricePerBlock` | Number | Euro cost per block of excess weight. |
+| `limits.maxWeight` | Number | Maximum weight per item; `0` = unconstrained. |
+| `limits.maxLength` | Number | Maximum single-dimension length; `0` = unconstrained. |
+| `limits.maxSumDimensions` | Number | Maximum `L + W + H`; `0` = unconstrained. |
+
+### Indexes
+
+```javascript
+rateSchema.index({ agencyId: 1, type: 1, zoneName: 1 });
+```
+
+This compound index directly mirrors the `ratesByKey` cache structure. It also accelerates the bulk load query (`Rate.find({ agencyId: { $in: agencyIds } })`) used at startup.
+
+## Cache Key Structure
+
+At server startup, `loadAgencyTariffs()` builds a composite string key for each rate document and stores it in a `Map` for O(1) retrieval at request time.
+
+```javascript
+// api/src/api/services/cache.service.js
+function buildRateKey({ type, zoneName, palletTypeId }) {
+    return [
+        type,                          // "pallet" | "parcel"
+        zoneName,                      // e.g. "ZONA 1"
+        palletTypeId ?? 'none'         // ObjectId string or "none"
+    ].join('|');
+}
+```
+
+<CodeGroup>
+```text Pallet rate with pallet type
+"pallet|ZONA 1|507f1f77bcf86cd799439011"
+```
+
+```text Parcel or weight-volume rate (no pallet type)
+"parcel|ZONA 3|none"
+"pallet|NACIONAL|none"
+```
+</CodeGroup>
+
+The same key is constructed at query time in the calculators, so a rate lookup is a single `Map.get(key)` call with no database round-trip.
+
+<Tip>
+  When adding a new rate document via the REST API or seed script, ensure `zoneName` exactly matches the corresponding `Zone.name` field — the lookup is case-sensitive. A mismatch will cause the rate engine to return a `ZONE_NOT_FOUND` incident for that agency.
+</Tip>

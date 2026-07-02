@@ -1,0 +1,125 @@
+---
+title: "List Countries — Ship Quote API Locations Reference"
+sidebarTitle: "List Countries"
+description: "Retrieve all available countries from the Ship Quote geographic database with names translated into English, Spanish, Italian, or French."
+---
+
+The List Countries endpoint returns every country currently loaded into the Ship Quote in-memory country map, with names rendered in the language of your choice. Country data is fetched from an external countries API at server startup and held in memory — meaning this endpoint runs at near-zero latency with no database round-trip. The response is an array of lightweight objects containing only the ISO-2 country code and the translated country name, making it ideal for populating destination-country dropdowns in shipping forms.
+
+## Endpoint
+
+```
+GET /api/v1/locations/countries
+```
+
+## Query Parameters
+
+<ParamField query="lang" type="string">
+  Language code for country name translations. Controls which translation is
+  returned for each country's `countryName` field. Accepted values:
+
+  | Value | Language  |
+  |-------|-----------|
+  | `ES`  | Spanish   |
+  | `US`  | English   |
+  | `IT`  | Italian   |
+  | `FR`  | French    |
+
+  Defaults to `ES` (Spanish) when omitted. The value is case-insensitive — `es`,
+  `ES`, and `Es` are all treated identically.
+</ParamField>
+
+## Response
+
+Returns `HTTP 200 OK` with a JSON array. Each element represents one country.
+
+<ResponseField name="countryCode" type="string">
+  ISO-3166-1 alpha-2 country code in uppercase (e.g. `ES`, `FR`, `DE`, `IT`).
+  Use this value as the `countryCode` field when calling
+  `POST /rates/compareByPostalCode` or `POST /rates/compareByProvinceCode`.
+</ResponseField>
+
+<ResponseField name="countryName" type="string">
+  Human-readable country name in the requested language. For example, with
+  `lang=ES` Spain appears as `España`; with `lang=IT` it appears as `Spagna`.
+</ResponseField>
+
+## Examples
+
+<CodeGroup>
+
+```bash Spanish names (default)
+curl -X GET "http://localhost:3000/api/v1/locations/countries"
+```
+
+```bash Italian names
+curl -X GET "http://localhost:3000/api/v1/locations/countries?lang=IT"
+```
+
+</CodeGroup>
+
+### Spanish response (`lang=ES`)
+
+```json
+[
+  {
+    "countryCode": "ES",
+    "countryName": "España"
+  },
+  {
+    "countryCode": "FR",
+    "countryName": "Francia"
+  },
+  {
+    "countryCode": "DE",
+    "countryName": "Alemania"
+  },
+  {
+    "countryCode": "IT",
+    "countryName": "Italia"
+  }
+]
+```
+
+### Italian response (`lang=IT`)
+
+```json
+[
+  {
+    "countryCode": "ES",
+    "countryName": "Spagna"
+  },
+  {
+    "countryCode": "FR",
+    "countryName": "Francia"
+  },
+  {
+    "countryCode": "DE",
+    "countryName": "Germania"
+  },
+  {
+    "countryCode": "IT",
+    "countryName": "Italia"
+  }
+]
+```
+
+## Error Responses
+
+```json 404 Not Found — No countries loaded
+{
+  "message": "Countries not found"
+}
+```
+
+<Warning>
+  A `404` on this endpoint typically means the external countries API was
+  unavailable or disabled at server startup (`COUNTRIES_API_ENABLED=false`). In
+  that case the in-memory country map is empty and no results can be returned.
+  Check your environment configuration and restart the server to reload country
+  data.
+</Warning>
+
+<Info>
+  Country data is loaded once at boot time across three paginated requests (offsets 0, 100, 200) to cover the full global catalogue. The data is held in a `Map` keyed by language code, so lookups are **O(1)** regardless of how many countries are stored.
+</Info>

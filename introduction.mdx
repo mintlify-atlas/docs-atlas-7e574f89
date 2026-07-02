@@ -1,0 +1,92 @@
+---
+title: "Ship Quote: Multi-Carrier Shipping Rate Comparison API"
+sidebarTitle: "Introduction"
+description: "Ship Quote is a MERN-stack API that compares shipping rates across static database providers and live external carrier APIs in a single request."
+---
+
+Ship Quote is a shipping rate comparison platform built on Node.js, Express 5, and MongoDB. It solves the problem of querying multiple freight carriers one-by-one by acting as a single orchestration layer — your application sends one request describing the shipment, and Ship Quote fans out to every configured carrier simultaneously, normalises the results, and returns a unified array of quotes you can present directly to a user or use programmatically to select the cheapest or fastest option.
+
+## How It Works
+
+<CardGroup cols={2}>
+  <Card title="Dual Provider Architecture" icon="arrows-split-up-and-left">
+    Rates are sourced from two complementary pools in parallel: **static providers** read pre-loaded tariff tables stored in MongoDB, while **API providers** call live external carrier endpoints in real time. Both pools are normalised to the same response shape before being returned.
+  </Card>
+  <Card title="Automatic Scope Detection" icon="location-dot">
+    Every request carries a `countryCode`. Ship Quote compares it to the `DEFAULT_COUNTRY` environment variable and automatically classifies the shipment as **national** or **international**. Only carriers that support the detected scope are queried, preventing irrelevant results.
+  </Card>
+  <Card title="Pallets & Parcels" icon="boxes-stacked">
+    Two shipment types are supported natively. **Pallets** are validated against per-carrier dimension and weight constraints and matched to the closest pallet category (e.g. quarter, half, full). **Parcels** use a lighter validation path for standard packages.
+  </Card>
+  <Card title="Resilient Error Handling" icon="shield-check">
+    A failure from one external carrier API never blocks the rest. Each provider is called independently; errors are captured per-provider and surfaced in the response `incidents` field so callers can see exactly what went wrong without losing quotes from healthy providers.
+  </Card>
+  <Card title="O(1) In-Memory Cache" icon="bolt">
+    On startup the server loads zones, rates, provinces, and countries into `Map` structures keyed for direct lookup. This eliminates repeated database round-trips on the hot path and keeps median response times low even under concurrent load.
+  </Card>
+  <Card title="Dynamic Surcharge Engine" icon="calculator">
+    Carriers can be configured with fuel surcharges (percentage or fixed), excess-weight blocks, and dimensional penalties. The engine calculates and itemises every surcharge in the response `breakdown` array so consumers know exactly what drives the final price.
+  </Card>
+</CardGroup>
+
+## Supported Carriers
+
+Ship Quote ships with bootstrap data and adapter support for the following carriers:
+
+| Carrier | Provider Type | Shipment Types |
+|---|---|---|
+| **Cayco** | Static (DB rates) | Pallets |
+| **Tecum** | Static (DB rates) | Pallets |
+| **MRW** | Static (DB rates) | Parcels |
+| **Correosexpress** | Static (DB rates) | Parcels |
+| **Dachser** | External API | Pallets |
+
+<Note>
+  Dachser is queried via its live API and requires a valid `DACHSER_API_KEY` in your environment. If the key is absent, Dachser is skipped and no error is raised for the other carriers. DHL and FedEx API key variables are reserved in the configuration for future adapters.
+</Note>
+
+## Scope Detection
+
+The scope system is the foundation of carrier filtering. When a rate comparison request arrives, the `getScope` helper compares the request's `countryCode` to the `DEFAULT_COUNTRY` environment variable:
+
+```javascript
+// api/src/lib/constants/scopes.zone.js
+export function getScope(countryCode) {
+  return countryCode === process.env.DEFAULT_COUNTRY
+    ? SCOPE_TYPES.NATIONAL      // 'national'
+    : SCOPE_TYPES.INTERNATIONAL; // 'international'
+}
+```
+
+Each agency in the database carries a `rules.coverage` array (e.g. `["national", "international"]`). Ship Quote filters the active agency list to those whose coverage includes the detected scope before dispatching any provider calls. This means adding international carriers in the future requires only a database record change — no code modifications.
+
+## Agency Types
+
+Agencies are typed as one of three values defined in the codebase:
+
+- **`static`** — rates are read entirely from MongoDB (zones, pallet types, rate tables)
+- **`api`** — rates are fetched from an external carrier API via a carrier adapter
+- **`hybrid`** — both sources are combined for a single agency
+
+## Project Structure
+
+```
+ship-quote/
+├── api/          # Node.js + Express 5 backend
+│   └── src/
+│       ├── api/
+│       │   ├── controllers/   # Route handlers
+│       │   ├── middlewares/   # Validation & error handling
+│       │   ├── services/      # Rate engine, caching, agencies
+│       │   │   └── rates/
+│       │   │       ├── providers/   # Static & API provider logic
+│       │   │       ├── domains/     # Result construction
+│       │   │       └── presenters/  # Response formatting
+│       │   └── docs/          # OpenAPI specification
+│       └── lib/
+│           ├── models/        # Mongoose schemas
+│           ├── constants/     # Scope types, agency types, units
+│           ├── configs/       # DB & server bootstrap
+│           └── logger/        # Winston + Morgan (Loki-compatible)
+└── web/          # React + Vite frontend
+```

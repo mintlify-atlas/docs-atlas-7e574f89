@@ -1,0 +1,338 @@
+---
+title: "Observability Stack: Logs, Loki, and Grafana"
+sidebarTitle: "Monitoring"
+description: "Trace every HTTP request from Winston JSON logs through Promtail and Loki into Grafana dashboards with Ship Quote's built-in observability stack."
+---
+
+Ship Quote has a fully integrated observability pipeline that captures structured logs at the application layer and makes them searchable in a Grafana dashboard within seconds of each request. The pipeline runs four components in sequence: Winston emits JSON logs from the Express API, Morgan intercepts every HTTP request and feeds it into Winston, Promtail scrapes those logs from the Docker daemon and forwards them to Loki, and Grafana provides the query and visualization interface on top of Loki.
+
+## Pipeline Overview
+
+```
+Express API (Winston logger)
+        │  JSON lines → stdout
+        ▼
+  Docker json-file log driver
+        │  /var/lib/docker/containers/<id>/<id>-json.log
+        ▼
+  Promtail (Docker service discovery)
+        │  POST /loki/api/v1/push
+        ▼
+  Loki (log aggregation)
+        │  LogQL queries
+        ▼
+  Grafana (dashboards & exploration)
+```
+
+## Winston Logger
+
+The core logger is configured in `api/src/lib/logger/logger.js` using the `winston` package:
+
+```js
+import winston from 'winston';
+
+const logger = winston.createLogger({
+    level: process.env.LOG_LEVEL || 'info',
+
+    format: winston.format.combine(
+        winston.format.timestamp(),
+        winston.format.errors({ stack: true }),
+        winston.format.json()
+    ),
+
+    transports: [
+        new winston.transports.Console()
+    ],
+});
+
+export default logger;
+```
+
+Every log entry is serialized as a single-line JSON object and written to `stdout`. The Docker `json-file` driver wraps each line in its own JSON envelope, which Promtail later unwraps.
+
+### Log Levels
+
+The active level is controlled by the `LOG_LEVEL` environment variable and falls back to `info` when not set.
+
+| Level | When to use |
+|-------|-------------|
+| `error` | Unhandled exceptions, 5xx responses |
+| `warn` | 4xx client errors, degraded states |
+| `info` | Normal HTTP requests, startup events |
+| `debug` | Internal computation, provider calls, cache hits |
+
+<Note>
+  Setting `LOG_LEVEL=debug` causes Winston to emit verbose output including internal rate-engine calculations, MongoDB query details, and per-provider API call traces. This produces a high volume of log data and **should not be used in production** as it may impact performance and rapidly fill your Loki storage.
+</Note>
+
+### Log Format
+
+A typical structured log entry looks like this:
+
+```json
+{
+  "level": "info",
+  "message": "http_requests",
+  "service": "ship-quote-api",
+  "method": "POST",
+  "path": "/api/v1/rates/compareByPostalCode",
+  "status": 200,
+  "responseTime": 43,
+  "contentLength": 1872,
+  "ip": "172.18.0.1",
+  "userAgent": "curl/8.4.0",
+  "event": "http_requests",
+  "timestamp": "2026-06-18T10:30:00.123Z"
+}
+```
+
+The `event` field is set to `"http_requests"` for all HTTP traffic, making it a reliable label to filter on in Grafana's LogQL.
+
+## Morgan HTTP Logger
+
+Morgan is the HTTP request logging middleware for Express. Rather than writing its own log format, it is wired directly into the Winston transport in `api/src/lib/logger/morgan.js`:
+
+```js
+import morgan from 'morgan';
+import logger from './logger.js';
+
+const getLogLevelFromStatus = (status) => {
+    return status >= 500
+        ? 'error'
+        : status >= 400
+            ? 'warn'
+            : 'info';
+};
+
+const httpLogger = morgan((tokens, req, res) => {
+    const status = Number(tokens.status(req, res));
+    const logLevel = getLogLevelFromStatus(status);
+
+    logger[logLevel]('http_requests', {
+        service: 'ship-quote-api',
+        ...res?.locals.logData,
+        method:        tokens.method(req, res),
+        path:          req.path,
+        status,
+        responseTime:  Number(tokens['response-time'](req, res)),
+        contentLength: tokens.res(req, res, 'content-length') || 0,
+        ip:            tokens['remote-addr'](req, res),
+        userAgent:     tokens['user-agent'](req, res),
+    });
+
+    return null;  // prevents Morgan from writing its own string to stdout
+});
+
+export default process.env.NODE_ENV === 'test'
+    ? morgan('dev')
+    : httpLogger;
+```
+
+Key behaviours to note:
+
+- **Log-level routing:** The severity is derived automatically from the HTTP status code. `2xx/3xx` → `info`, `4xx` → `warn`, `5xx` → `error`. This means failed requests surface immediately in Grafana when filtering on `level=warn` or `level=error`.
+- **Null return:** Morgan's formatter returns `null` instead of a string, preventing a duplicate plain-text line from appearing alongside the JSON output.
+- **Test mode:** When `NODE_ENV=test`, the middleware falls back to Morgan's built-in `dev` format so test output stays human-readable in CI logs.
+- **`res.locals.logData`:** Controllers can attach extra context (such as matched agency or zone) to `res.locals.logData`; Morgan spreads it into the log entry automatically.
+
+## Promtail Configuration
+
+Promtail runs as a Docker service alongside the API and is responsible for collecting container logs and forwarding them to Loki. Its configuration is mounted from `infra/monitoring/promtail/config.yml`:
+
+```yaml
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)
+        target_label: container
+
+    pipeline_stages:
+      - json:
+          expressions:
+            service:      service
+            method:       method
+            status:       status
+            level:        level
+            event:        event
+            path:         path
+            responseTime: responseTime
+            ip:           ip
+
+      - labels:
+          service:
+          method:
+          status:
+          level:
+          event:
+```
+
+### How Promtail Works
+
+**Docker service discovery (`docker_sd_configs`):** Promtail connects to the Docker socket at `/var/run/docker.sock` and automatically discovers all running containers every 5 seconds. No manual log-path configuration is needed — new containers are picked up dynamically.
+
+**Relabeling:** The `__meta_docker_container_name` metadata label (which Docker sets to `/ship-quote-app-dev`, `/ship-quote-loki`, etc.) is captured with a regex that strips the leading `/` and stored as the `container` label on every log stream. This lets you filter logs by container name directly in Grafana.
+
+**Pipeline stages:** The `json` stage parses each log line as JSON and extracts the fields that Winston emits (`service`, `method`, `status`, `level`, `event`, `path`, `responseTime`, `ip`). The `labels` stage then promotes those extracted values into Loki stream labels, enabling efficient indexed filtering on common query dimensions.
+
+**Positions file:** Promtail records its read offset in `/tmp/positions.yaml`. On container restart it resumes from the last position, ensuring no log lines are lost or duplicated.
+
+## Loki Configuration
+
+Loki stores the log streams forwarded by Promtail. Its configuration is mounted from `infra/monitoring/loki/config.yml`:
+
+```yaml
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+
+common:
+  path_prefix: /loki
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2023-01-01
+      store: boltdb-shipper
+      object_store: filesystem
+      schema: v11
+      index:
+        prefix: index_
+        period: 24h
+
+storage_config:
+  boltdb_shipper:
+    active_index_directory: /loki/index
+    cache_location:         /loki/cache
+  filesystem:
+    directory: /loki/chunks
+
+compactor:
+  working_directory: /loki/compactor
+
+limits_config:
+  allow_structured_metadata: false
+```
+
+### Storage Layout
+
+| Path | Content |
+|------|---------|
+| `/loki/index` | BoltDB index files (one per 24-hour period) |
+| `/loki/cache` | BoltDB shipper read cache |
+| `/loki/chunks` | Raw compressed log chunks on the local filesystem |
+| `/loki/compactor` | Compaction working directory |
+
+All of these paths live inside the `loki_data` named Docker volume, so log data persists across Loki container restarts. The `period: 24h` index rotation means a new index shard is created each day, keeping individual shard sizes manageable.
+
+<Info>
+  `auth_enabled: false` disables Loki's multi-tenant authentication. This is appropriate for a single-environment development or self-hosted setup. For a shared or internet-facing deployment, enable authentication and configure a reverse proxy in front of Loki.
+</Info>
+
+## Grafana Setup
+
+Grafana is exposed at [http://localhost:3001](http://localhost:3001). The default credentials are `admin` / `admin` (set via the `GF_SECURITY_ADMIN_USER` and `GF_SECURITY_ADMIN_PASSWORD` environment variables in `docker-compose.yml`). Dashboard and data-source configurations are persisted in the `grafana_data` named volume.
+
+### Adding the Loki Data Source
+
+<Steps>
+  <Step title="Open the Data Sources settings">
+    In Grafana, click the **hamburger menu (☰)** in the top-left corner, then navigate to **Connections → Data sources**.
+  </Step>
+
+  <Step title="Add a new data source">
+    Click **Add new data source** and select **Loki** from the list.
+  </Step>
+
+  <Step title="Set the connection URL">
+    In the **URL** field enter:
+
+    ```
+    http://loki:3100
+    ```
+
+    Use the Docker service name `loki` (not `localhost`) because Grafana and Loki run in the same Docker Compose network and resolve each other by service name.
+  </Step>
+
+  <Step title="Save and test">
+    Scroll to the bottom of the page and click **Save & test**. Grafana will verify the connection; you should see a green **"Data source connected and labels found"** confirmation.
+  </Step>
+
+  <Step title="Explore logs">
+    Navigate to **Explore** (compass icon in the left sidebar). Select your Loki data source, then use a LogQL query to view API logs:
+
+    ```logql
+    {container="ship-quote-app-dev"}
+    ```
+
+    Filter to HTTP requests only:
+
+    ```logql
+    {container="ship-quote-app-dev", event="http_requests"}
+    ```
+
+    Show only errors and warnings:
+
+    ```logql
+    {container="ship-quote-app-dev"} | json | level=~"warn|error"
+    ```
+  </Step>
+</Steps>
+
+## Useful LogQL Queries
+
+Once the Loki data source is connected, the following queries cover the most common monitoring scenarios.
+
+**All API log lines:**
+```logql
+{container="ship-quote-app-dev"}
+```
+
+**HTTP 5xx errors in the last hour:**
+```logql
+{container="ship-quote-app-dev", level="error"} | json | status >= 500
+```
+
+**Slow requests (response time > 500 ms):**
+```logql
+{container="ship-quote-app-dev", event="http_requests"} | json | responseTime > 500
+```
+
+**Rate comparison endpoint traffic:**
+```logql
+{container="ship-quote-app-dev"} | json | path="/api/v1/rates/compareByPostalCode"
+```
+
+**Request rate over time (metric query):**
+```logql
+rate({container="ship-quote-app-dev", event="http_requests"}[1m])
+```
+
+## Environment Variable Reference
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LOG_LEVEL` | `info` | Winston log level (`error`, `warn`, `info`, `debug`). Set on the `app` service in `docker-compose.yml`. |
+| `NODE_ENV` | `production` | When set to `test`, Morgan switches to the `dev` plain-text formatter instead of the JSON transport. |
+
+<Tip>
+  To change the log level without rebuilding the image, update the `LOG_LEVEL` value in `docker-compose.yml` under the `app` service's `environment` block and run `docker-compose up -d app` to recreate only the API container.
+</Tip>

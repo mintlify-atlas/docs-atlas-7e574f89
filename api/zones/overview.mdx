@@ -1,0 +1,393 @@
+---
+title: "Shipping Zones API — Create, List & Retrieve Zones"
+sidebarTitle: "Zones"
+description: "Full reference for the /api/v1/zones endpoints. Create and query the zone definitions that map destination provinces to price tiers for each agency."
+---
+
+Zones are the geographic building blocks of the Ship Quote rate engine. Each zone groups one or more destination province admin codes under a single name — for example, Cayco's **ZONA 1** covers only Madrid (`ES-M`), while its **ZONA 7** spans eight north-western provinces. When a quote request arrives with a destination postal code or province, the engine resolves the province's admin code, finds the matching zone for the active agency, and uses that zone name to look up the correct price row in the agency's rate table.
+
+Agencies can also define **postal code exceptions** to override the default zone for specific postal code ranges within a province. Tecum, for example, redirects certain postal codes in Guadalajara (`ES-GU`) to **ZONA 2** instead of the province's default **ZONA 1**, enabling fine-grained pricing for rural or remote areas.
+
+<Note>
+  Each zone is agency-scoped via `agencyId`. An agency's zone set must be complete — every province it serves should be covered by at least one zone, otherwise the rate engine will return no quote for destinations in uncovered provinces. Use postal code exceptions for sub-province overrides rather than creating overlapping zones.
+</Note>
+
+---
+
+## POST /api/v1/zones
+
+Create a new zone for an agency.
+
+### Request body
+
+<ParamField body="agencyId" type="string" required>
+  MongoDB ObjectId of the agency this zone belongs to.
+</ParamField>
+
+<ParamField body="name" type="string" required>
+  Zone identifier as it appears in the agency's rate table (e.g. `"ZONA 1"`, `"ZONA 3"`, `"ZONA 21"`, `"NACIONAL"`). This value is used verbatim as the lookup key when pricing a shipment.
+</ParamField>
+
+<ParamField body="provinces" type="array">
+  List of province admin full codes covered by this zone. Each entry must be a string in the format `"CC-ADMINCODE"` matching the `adminFullCode` field in the locations collection (e.g. `"ES-M"` for Madrid, `"ES-B"` for Barcelona). A zone may cover multiple provinces or none (for special zones such as international or unassigned tiers).
+</ParamField>
+
+<ParamField body="calculationMode" type="string">
+  Controls which rate table the engine consults when pricing a shipment destined for this zone. Accepted values:
+
+  - `"pallet"` — use the pallet rate table (default)
+  - `"parcel"` — use the parcel rate table
+</ParamField>
+
+<ParamField body="postalCodeExceptions" type="array">
+  Optional list of postal code range overrides. When the destination postal code falls within one of these ranges, the engine uses the specified `zoneName` instead of the zone's default name. Useful for redirecting remote or rural postal codes within a province to a different price tier.
+
+  <Expandable title="postalCodeExceptions item fields">
+    <ParamField body="postalCodeExceptions[].from" type="string">
+      Starting postal code of the range (inclusive), e.g. `"19261"`.
+    </ParamField>
+
+    <ParamField body="postalCodeExceptions[].to" type="string">
+      Ending postal code of the range (inclusive), e.g. `"19287"`.
+    </ParamField>
+
+    <ParamField body="postalCodeExceptions[].zoneName" type="string">
+      The zone name to apply for postal codes that fall within this range, e.g. `"ZONA 2"`.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Response — 201 Created
+
+<ResponseField name="id" type="string">
+  MongoDB ObjectId of the newly created zone.
+</ResponseField>
+
+<ResponseField name="agencyId" type="string">
+  ObjectId of the owning agency. The `GET` endpoints populate this with `name` and `code` from the agency document.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Zone name as stored.
+</ResponseField>
+
+<ResponseField name="provinces" type="array">
+  Array of province admin full codes covered by this zone.
+</ResponseField>
+
+<ResponseField name="calculationMode" type="string">
+  `"pallet"` or `"parcel"`.
+</ResponseField>
+
+<ResponseField name="pricingMode" type="object">
+  Internal pricing configuration applied by the engine for this zone.
+
+  <Expandable title="pricingMode fields">
+    <ResponseField name="pricingMode.type" type="string">
+      `"weight"` — price based on gross weight only. `"weight_volume"` — price based on the greater of gross weight and volumetric weight. Cayco's ZONA 11 and ZONA 12 (Andalucia) use `"weight_volume"`.
+    </ResponseField>
+
+    <ResponseField name="pricingMode.tonnagePricingRule" type="object">
+      Tonnage threshold rule applied for heavy shipments.
+
+      <Expandable title="tonnagePricingRule fields">
+        <ResponseField name="pricingMode.tonnagePricingRule.enabled" type="boolean">
+          Whether the tonnage rule is active for this zone.
+        </ResponseField>
+        <ResponseField name="pricingMode.tonnagePricingRule.threshold" type="number">
+          Weight threshold in kg above which the per-tonne rate applies.
+        </ResponseField>
+        <ResponseField name="pricingMode.tonnagePricingRule.unit" type="string">
+          Pricing unit label, e.g. `"€/ton"`.
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 creation timestamp.
+</ResponseField>
+
+<ResponseField name="updatedAt" type="string">
+  ISO 8601 last-updated timestamp.
+</ResponseField>
+
+### Error responses
+
+| Status | Condition |
+|--------|-----------|
+| `400 Bad Request` | `agencyId` or `name` is missing, or the request body is malformed. |
+
+### Examples
+
+<CodeGroup>
+
+```bash Cayco — ZONA 3
+curl -X POST http://localhost:3000/api/v1/zones \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agencyId": "507f1f77bcf86cd799439011",
+    "name": "ZONA 3",
+    "provinces": ["ES-AV", "ES-GU", "ES-SG", "ES-VA"],
+    "calculationMode": "pallet"
+  }'
+```
+
+```bash Tecum — ZONA 1 with postal code exceptions
+curl -X POST http://localhost:3000/api/v1/zones \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agencyId": "507f1f77bcf86cd799439022",
+    "name": "ZONA 1",
+    "provinces": ["ES-GU", "ES-M"],
+    "calculationMode": "pallet",
+    "postalCodeExceptions": [
+      { "from": "19261", "to": "19261", "zoneName": "ZONA 2" },
+      { "from": "19280", "to": "19287", "zoneName": "ZONA 2" },
+      { "from": "19300", "to": "19392", "zoneName": "ZONA 2" }
+    ]
+  }'
+```
+
+```json 201 Response
+{
+  "id": "684b3a1cbe9876543210dcba",
+  "agencyId": "507f1f77bcf86cd799439011",
+  "name": "ZONA 3",
+  "provinces": ["ES-AV", "ES-GU", "ES-SG", "ES-VA"],
+  "calculationMode": "pallet",
+  "pricingMode": {
+    "type": "weight",
+    "tonnagePricingRule": {
+      "enabled": false,
+      "threshold": 2001,
+      "unit": "€/ton"
+    }
+  },
+  "createdAt": "2026-06-18T11:00:00.000Z",
+  "updatedAt": "2026-06-18T11:00:00.000Z"
+}
+```
+
+</CodeGroup>
+
+---
+
+## GET /api/v1/zones
+
+Return all zones across all agencies. The `agencyId` field is populated with the agency's `name` and `code` for convenience. Returns `404` when no zone documents exist in the collection.
+
+### Response — 200 OK
+
+An array of zone objects. Each object matches the `POST` 201 response shape above, with `agencyId` expanded to include `name` and `code`.
+
+### Example
+
+<CodeGroup>
+
+```bash cURL
+curl -X GET http://localhost:3000/api/v1/zones
+```
+
+```json 200 Response
+[
+  {
+    "id": "684b3a1cbe9876543210dcba",
+    "agencyId": {
+      "id": "507f1f77bcf86cd799439011",
+      "name": "Cayco",
+      "code": "cayco"
+    },
+    "name": "ZONA 1",
+    "provinces": ["ES-M"],
+    "calculationMode": "pallet",
+    "pricingMode": {
+      "type": "weight",
+      "tonnagePricingRule": {
+        "enabled": false,
+        "threshold": 2001,
+        "unit": "€/ton"
+      }
+    },
+    "createdAt": "2026-06-18T11:00:00.000Z",
+    "updatedAt": "2026-06-18T11:00:00.000Z"
+  },
+  {
+    "id": "684b3a1cbe9876543210dcbb",
+    "agencyId": {
+      "id": "507f1f77bcf86cd799439011",
+      "name": "Cayco",
+      "code": "cayco"
+    },
+    "name": "ZONA 11",
+    "provinces": ["ES-AL", "ES-J", "ES-MA"],
+    "calculationMode": "pallet",
+    "pricingMode": {
+      "type": "weight_volume",
+      "tonnagePricingRule": {
+        "enabled": true,
+        "threshold": 1001,
+        "unit": "€/ton"
+      }
+    },
+    "createdAt": "2026-06-18T11:00:00.000Z",
+    "updatedAt": "2026-06-18T11:00:00.000Z"
+  },
+  {
+    "id": "684b3a1cbe9876543210dcbc",
+    "agencyId": {
+      "id": "507f1f77bcf86cd799439022",
+      "name": "Tecum",
+      "code": "tecum"
+    },
+    "name": "ZONA 1",
+    "provinces": ["ES-GU", "ES-M"],
+    "calculationMode": "pallet",
+    "pricingMode": {
+      "type": "weight",
+      "tonnagePricingRule": {
+        "enabled": false,
+        "threshold": 2001,
+        "unit": "€/ton"
+      }
+    },
+    "createdAt": "2026-06-18T11:00:00.000Z",
+    "updatedAt": "2026-06-18T11:00:00.000Z"
+  }
+]
+```
+
+</CodeGroup>
+
+---
+
+## GET /api/v1/zones/:zoneId
+
+Retrieve the details of a single zone by its MongoDB ObjectId. The `agencyId` field is populated with the agency's `name` and `code`.
+
+### Path parameters
+
+<ParamField path="zoneId" type="string" required>
+  MongoDB ObjectId of the zone to retrieve.
+</ParamField>
+
+### Response — 200 OK
+
+A single zone object (same shape as the `POST` 201 response, with `agencyId` populated).
+
+### Error responses
+
+| Status | Condition |
+|--------|-----------|
+| `404 Not Found` | No zone document exists with the given `zoneId`. |
+
+### Example
+
+<CodeGroup>
+
+```bash cURL
+curl -X GET http://localhost:3000/api/v1/zones/684b3a1cbe9876543210dcba
+```
+
+```json 200 Response
+{
+  "id": "684b3a1cbe9876543210dcba",
+  "agencyId": {
+    "id": "507f1f77bcf86cd799439022",
+    "name": "Tecum",
+    "code": "tecum"
+  },
+  "name": "ZONA 3",
+  "provinces": ["ES-AV", "ES-BU", "ES-LO", "ES-SG", "ES-VA", "ES-Z"],
+  "calculationMode": "pallet",
+  "pricingMode": {
+    "type": "weight",
+    "tonnagePricingRule": {
+      "enabled": false,
+      "threshold": 2001,
+      "unit": "€/ton"
+    }
+  },
+  "createdAt": "2026-06-18T11:00:00.000Z",
+  "updatedAt": "2026-06-18T11:00:00.000Z"
+}
+```
+
+```json 404 Response
+{
+  "message": "Zone not found"
+}
+```
+
+</CodeGroup>
+
+---
+
+## Bootstrap reference — real zone definitions
+
+The tables below show the zones loaded by the built-in seed data for Cayco and Tecum, giving concrete examples of how province admin codes are grouped into pricing tiers.
+
+### Cayco zones
+
+| Zone | Provinces | Pricing mode |
+|------|-----------|-------------|
+| ZONA 1 | ES-M | weight |
+| ZONA 2 | ES-TO | weight |
+| ZONA 3 | ES-AV, ES-GU, ES-SG, ES-VA | weight |
+| ZONA 4 | ES-VI, ES-A, ES-BU, ES-CS, ES-LE, ES-LO, ES-MU, ES-SA, ES-SO, ES-TE, ES-V, ES-Z, ES-CR | weight |
+| ZONA 5 | ES-O, ES-S, ES-CU, ES-SS, ES-NA, ES-BI, ES-P, ES-AB, ES-ZA | weight |
+| ZONA 6 | ES-B, ES-HU, ES-T | weight |
+| ZONA 7 | ES-C, ES-GI, ES-LU, ES-OR, ES-PO, ES-CC, ES-BA, ES-L | weight |
+| ZONA 11 | ES-AL, ES-J, ES-MA | weight_volume (Andalucia) |
+| ZONA 12 | ES-SE, ES-CO | weight_volume (Andalucia) |
+
+<Tip>
+  Cayco's ZONA 11 and ZONA 12 cover Andalucia and use `pricingMode.type = "weight_volume"` with a tonnage threshold of 1 001 kg. Shipments to these zones are priced using a per-kilogram rate table rather than the standard pallet tier table.
+</Tip>
+
+### Tecum zones
+
+| Zone | Provinces |
+|------|-----------|
+| ZONA 1 | ES-GU, ES-M |
+| ZONA 2 | ES-SO, ES-TO |
+| ZONA 3 | ES-AV, ES-BU, ES-LO, ES-SG, ES-VA, ES-Z |
+| ZONA 4 | ES-VI, ES-HU, ES-LE, ES-NA, ES-P, ES-SA, ES-TE, ES-V, ES-ZA |
+| ZONA 5 | ES-CS, ES-SS, ES-L, ES-O, ES-S, ES-T, ES-BI |
+| ZONA 6 | ES-B, ES-CC |
+| ZONA 7 | ES-C, ES-GI, ES-LU, ES-OR, ES-PO |
+| ZONA 8 | *(unassigned — reserved tier)* |
+| ZONA 9 | ES-IB-ML |
+| ZONA 10 | ES-IB-IB, ES-IB-MN |
+| ZONA 11 | ES-GC-GC, ES-TF-TE |
+| ZONA 12 | ES-GC-FU, ES-GC-LA, ES-TF-LP, ES-TF-LG, ES-TF-EH |
+| ZONA 13 | PT-Madeira |
+| ZONA 14 | PT-São Miguel |
+| ZONA 16 | ES-GR *(via postal code exception override)* |
+| ZONA 17 | ES-GR *(via postal code exception override)* |
+| ZONA 21 | ES-J |
+| ZONA 22 | ES-CO |
+| ZONA 23 | ES-AB, ES-AL, ES-CR, ES-SE, ES-MA |
+| ZONA 24 | ES-BA, ES-CU, ES-H, ES-MU |
+| ZONA 25 | ES-A, ES-CA |
+
+### Tecum postal code exceptions (sample)
+
+Tecum uses postal code exceptions to route specific addresses in Guadalajara (`ES-GU`) to **ZONA 2** and several postal ranges in León (`ES-LE`) to **ZONA 6**, overriding the default zone for those provinces.
+
+```json
+[
+  { "from": "19261", "to": "19261", "zoneName": "ZONA 2" },
+  { "from": "19280", "to": "19287", "zoneName": "ZONA 2" },
+  { "from": "19300", "to": "19392", "zoneName": "ZONA 2" },
+  { "from": "19432", "to": "19445", "zoneName": "ZONA 2" },
+  { "from": "19460", "to": "19463", "zoneName": "ZONA 2" },
+  { "from": "24100", "to": "24114", "zoneName": "ZONA 6" },
+  { "from": "24300", "to": "24319", "zoneName": "ZONA 6" },
+  { "from": "24360", "to": "24380", "zoneName": "ZONA 6" },
+  { "from": "18001", "to": "18015", "zoneName": "ZONA 16" },
+  { "from": "18100", "to": "18199", "zoneName": "ZONA 16" },
+  { "from": "18200", "to": "18330", "zoneName": "ZONA 16" }
+]
+```

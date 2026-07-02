@@ -1,0 +1,107 @@
+{
+  "projectType": "api-service",
+  "projectName": "Ship Quote",
+  "projectDescription": "A MERN-stack shipping rate comparison platform that aggregates pricing from multiple carrier agencies — both static database entries and live external APIs — and returns normalized, side-by-side quotes for pallets and parcels.",
+  "theme": "luma",
+  "primaryColor": "#2563EB",
+  "lightColor": "#EFF6FF",
+  "darkColor": "#1E3A5F",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "configuration"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/rate-engine",
+              "architecture/data-models"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/docker",
+              "deployment/monitoring"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Rates",
+            "pages": [
+              "api/rates/compare-by-postal-code",
+              "api/rates/compare-by-province-code"
+            ]
+          },
+          {
+            "group": "Agencies",
+            "pages": [
+              "api/agencies/create",
+              "api/agencies/list",
+              "api/agencies/update-status"
+            ]
+          },
+          {
+            "group": "Locations",
+            "pages": [
+              "api/locations/create",
+              "api/locations/list-countries",
+              "api/locations/list-provinces",
+              "api/locations/province-by-postal-code"
+            ]
+          },
+          {
+            "group": "Pallets & Zones",
+            "pages": [
+              "api/pallets/overview",
+              "api/zones/overview"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Dual-provider rate engine: queries static database rates and live external carrier APIs in parallel",
+    "Automatic national/international scope detection based on destination country code",
+    "Support for pallet and parcel shipment types with full dimension and weight validation",
+    "Agency management with static, API, and hybrid carrier types",
+    "Geographic database of countries and provinces with postal code lookup",
+    "Configurable surcharges (fuel, weight overages, special dimensions) per agency",
+    "In-memory Map caching for O(1) zone and rate lookups after server startup",
+    "Integrated observability stack: Winston logging forwarded to Loki/Promtail with Grafana dashboards",
+    "React + Vite frontend for interactive rate comparison",
+    "Full Docker Compose environment for API, MongoDB, and monitoring stack"
+  ],
+  "publicApiSurface": [
+    "POST /api/v1/rates/compareByPostalCode",
+    "POST /api/v1/rates/compareByProvinceCode",
+    "POST /api/v1/agencies",
+    "GET /api/v1/agencies",
+    "PATCH /api/v1/agencies/:agencyId",
+    "POST /api/v1/locations",
+    "GET /api/v1/locations/countries",
+    "GET /api/v1/locations/provinces",
+    "GET /api/v1/locations/provincesByPostalCode/:postalCode",
+    "POST /api/v1/pallets",
+    "GET /api/v1/pallets",
+    "GET /api/v1/pallets/:palletTypeId",
+    "DELETE /api/v1/pallets/:palletTypeId",
+    "POST /api/v1/zones",
+    "GET /api/v1/zones",
+    "GET /api/v1/zones/:zoneId"
+  ]
+}
